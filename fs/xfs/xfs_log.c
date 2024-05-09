@@ -2783,6 +2783,11 @@ xlog_state_do_iclog_callbacks(
 
 		if (xlog_state_iodone_process_iclog(log, iclog))
 			break;
+		/*
+		 * xlog_state_iodone_process_iclog()返回false表示要进一步处理。
+		 * - 但只有被标记为XLOG_STATE_CALLBACK的iclog还要真正执行回调；
+		 *   > 因为要保证执行回调的iclog的顺序
+		 */
 		if (iclog->ic_state != XLOG_STATE_CALLBACK) {
 			iclog = iclog->ic_next;
 			continue;

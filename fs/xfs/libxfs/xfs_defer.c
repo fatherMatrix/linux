@@ -409,6 +409,8 @@ xfs_defer_cancel_list(
  * Prevent a log intent item from pinning the tail of the log by logging a
  * done item to release the intent item; and then log a new intent item.
  * The caller should provide a fresh transaction and roll it after we're done.
+ *
+ * upstream commit: 4e919af7827a6adfc28e82cd6c4ffcfcc3dd6118
  */
 static int
 xfs_defer_relog(
