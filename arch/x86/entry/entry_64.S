@@ -611,6 +611,10 @@ SYM_CODE_END(\asmsym)
 	.globl __irqentry_text_start
 __irqentry_text_start:
 
+/*
+ * v6.6中所有的中断向量表都在本头文件中定义
+ */
+
 #include <asm/idtentry.h>
 
 	__ALIGN

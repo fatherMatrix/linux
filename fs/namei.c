@@ -571,6 +571,12 @@ struct nameidata {
 	struct path	root;
 	struct inode	*inode; /* path.dentry.d_inode */
 	unsigned int	flags, state;
+	/*
+	 * next_seq: 其实就是last部分在walk_component()中解析到的子dentry的
+	 * 	     d_seq，在v5.4中是作为临时变量和参数在函数间传递，这里
+	 * 	     将其放入nd而已，无它。
+	 * r_seq:    保护rename_lock
+	 */
 	unsigned	seq, next_seq, m_seq, r_seq;
 	int		last_type;
 	unsigned	depth;
@@ -1869,6 +1875,10 @@ static const char *step_into(struct nameidata *nd, int flags,
 		if (path.mnt == nd->path.mnt)
 			mntget(path.mnt);
 	}
+	/*
+	 * 与v5.4内核相比，将读取软链接的操作统一移入到了pick_link()中，返回值
+	 * 是软链接的目标路径；
+	 */
 	return pick_link(nd, &path, inode, flags);
 }
 
