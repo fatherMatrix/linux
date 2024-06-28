@@ -1261,6 +1261,9 @@ xlog_cil_push_work(
 	 * completion.
 	 */
 	error = xlog_cil_write_chain(ctx, num_bytes);
+	/*
+	 * 这个时候会不会太迟了呢？
+	 */
 	list_del(&lvhdr.lv_list);
 	if (error)
 		goto out_abort_free_ticket;

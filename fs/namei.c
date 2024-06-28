@@ -1803,6 +1803,9 @@ static const char *pick_link(struct nameidata *nd, struct path *link,
 	if (!res) {
 		const char * (*get)(struct dentry *, struct inode *,
 				struct delayed_call *);
+		/*
+		 * xfs: xfs_vn_get_link()
+		 */
 		get = inode->i_op->get_link;
 		if (nd->flags & LOOKUP_RCU) {
 			res = get(NULL, inode, &last->done);

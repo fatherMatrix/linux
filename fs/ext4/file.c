@@ -585,6 +585,9 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	count = ret;
 
 	if (extend) {
+	/*
+	 * 为啥有extent时，就要将inode添加到orphan list上呢？
+	 */
 		handle = ext4_journal_start(inode, EXT4_HT_INODE, 2);
 		if (IS_ERR(handle)) {
 			ret = PTR_ERR(handle);
@@ -607,6 +610,11 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (ret == -ENOTBLK)
 		ret = 0;
 
+	/*
+	 * 这里是有问题的，O_SYNC+O_DIRECT模式的文件写操作返回后，i_size有可能
+	 * 没有被更新到磁盘上
+	 * - 参见：upstream commit: 91562895f8030cb9a0470b1db49de79346a69f91
+	 */
 	if (extend)
 		ret = ext4_handle_inode_extension(inode, offset, ret, count);
 

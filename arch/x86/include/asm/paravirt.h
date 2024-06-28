@@ -84,6 +84,9 @@ static inline void __flush_tlb_one_user(unsigned long addr)
 static inline void __flush_tlb_multi(const struct cpumask *cpumask,
 				      const struct flush_tlb_info *info)
 {
+	/*
+	 * native_flush_tlb_multi()
+	 */
 	PVOP_VCALL2(mmu.flush_tlb_multi, cpumask, info);
 }
 

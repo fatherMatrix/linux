@@ -40,7 +40,12 @@ struct xfs_log_item {
 	struct list_head		li_bio_list;	/* buffer item list */
 	const struct xfs_item_ops	*li_ops;	/* function list */
 
-	/* delayed logging */
+	/*
+	 * delayed logging
+	 * - 作为链表元素，先插入xlog_cil_pcp->log_items中，然后通过
+	 *   xlog_cil_push_work() -> xlog_cil_push_pcp_aggregate()整合到
+	 *   xfs_cil_ctx->log_items中
+	 */
 	struct list_head		li_cil;		/* CIL pointers */
 	struct xfs_log_vec		*li_lv;		/* active log vector */
 	struct xfs_log_vec		*li_lv_shadow;	/* standby vector */
