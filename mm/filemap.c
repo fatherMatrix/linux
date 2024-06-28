@@ -1917,6 +1917,9 @@ no_page:
 		if (WARN_ON_ONCE(!(fgp_flags & (FGP_LOCK | FGP_FOR_MMAP))))
 			fgp_flags |= FGP_LOCK;
 
+		/*
+		 * 如果不支持巨型页则只能为一个单页
+		 */
 		if (!mapping_large_folio_support(mapping))
 			order = 0;
 		if (order > MAX_PAGECACHE_ORDER)

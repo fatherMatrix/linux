@@ -226,6 +226,11 @@ struct xfs_cil_ctx {
 	struct xlog_ticket	*ticket;	/* chkpt ticket */
 	atomic_t		space_used;	/* aggregate size of regions */
 	struct xfs_busy_extents	busy_extents;
+	/*
+	 * 全局的CIL链表，链表元素是li_cil
+	 * - 通过xlog_cil_push_pcp_aggregate()收集percpu的xlog_cil_pcp中的
+	 *   log_items链表元素
+	 */
 	struct list_head	log_items;	/* log items in chkpt */
 	struct list_head	lv_chain;	/* logvecs being pushed */
 	struct list_head	iclog_entry;
@@ -284,6 +289,10 @@ struct xfs_cil {
 	xfs_csn_t		xc_current_sequence;
 	wait_queue_head_t	xc_push_wait;	/* background push throttle */
 
+	/*
+	 * 指向percpu的xlog_cil_pcp
+	 * - 引入patch：upstream commit af1c2146a50b1ffe7e10cae1f7e64ab56b7f8c1f
+	 */
 	void __percpu		*xc_pcp;	/* percpu CIL structures */
 } ____cacheline_aligned_in_smp;
 

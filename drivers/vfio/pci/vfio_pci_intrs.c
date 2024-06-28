@@ -296,6 +296,10 @@ static int vfio_intx_set_signal(struct vfio_pci_core_device *vdev, int fd)
 
 	ctx->trigger = trigger;
 
+	/*
+	 * 这里要修一下：
+	 * - upstream commit: fe9a7082684eb059b925c535682e68c34d487d43
+	 */
 	if (!vdev->pci_2_3)
 		irqflags = 0;
 
