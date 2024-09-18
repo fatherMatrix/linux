@@ -75,7 +75,16 @@ int iomap_iter(struct iomap_iter *iter, const struct iomap_ops *ops)
 {
 	int ret;
 
+	/*
+	 * 调用函数中对iomap_iter iter的初始化的方式会导致iomap.length默认为0
+	 * - 此时是第一次进入本函数，跳过下面这个if分支
+	 */
 	if (iter->iomap.length && ops->iomap_end) {
+		/*
+		 * xfs:
+		 * - direct io: NA
+		 * - buffer io: xfs_buffered_write_iomap_end()
+		 */
 		ret = ops->iomap_end(iter->inode, iter->pos, iomap_length(iter),
 				iter->processed > 0 ? iter->processed : 0,
 				iter->flags, &iter->iomap);
@@ -89,7 +98,9 @@ int iomap_iter(struct iomap_iter *iter, const struct iomap_ops *ops)
 		return ret;
 
 	/*
-	 * xfs: xfs_direct_write_iomap_begin()
+	 * xfs:
+	 * - direct io: xfs_direct_write_iomap_begin()
+	 * - buffer io: xfs_buffered_write_iomap_begin()
 	 */
 	ret = ops->iomap_begin(iter->inode, iter->pos, iter->len, iter->flags,
 			       &iter->iomap, &iter->srcmap);

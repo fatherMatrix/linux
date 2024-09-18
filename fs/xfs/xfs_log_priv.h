@@ -287,6 +287,10 @@ struct xfs_cil {
 	wait_queue_head_t	xc_commit_wait;
 	wait_queue_head_t	xc_start_wait;
 	xfs_csn_t		xc_current_sequence;
+	/*
+	 * 引入patch：upstream commit: 0e7ab7efe77451cba4cbecb6c9f5ef83cf32b36b
+	 * - 主优化：upstream commit: 0e7ab7efe7745
+	 */
 	wait_queue_head_t	xc_push_wait;	/* background push throttle */
 
 	/*

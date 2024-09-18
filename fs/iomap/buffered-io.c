@@ -1613,6 +1613,9 @@ iomap_sort_ioends(struct list_head *ioend_list)
 }
 EXPORT_SYMBOL_GPL(iomap_sort_ioends);
 
+/*
+ * 从v5.4中的xfs_end_bio()中拆分出来，具体区别参见iomap_submit_ioend()
+ */
 static void iomap_writepage_end_bio(struct bio *bio)
 {
 	struct iomap_ioend *ioend = bio->bi_private;
@@ -1636,6 +1639,18 @@ iomap_submit_ioend(struct iomap_writepage_ctx *wpc, struct iomap_ioend *ioend,
 	ioend->io_bio->bi_end_io = iomap_writepage_end_bio;
 
 	if (wpc->ops->prepare_ioend)
+		/*
+		 * xfs: xfs_prepare_ioend()
+		 * - 这里会将下列情况下的bi_end_io换为xfs_end_bio()
+		 *   > xfs_ioend_is_append()
+		 *   > ioend->io_type == IOMAP_UNWRITTEN
+		 *   > ioend->io_flags & IOMAP_F_SHARED （本情况即为IOMAP_COW）
+		 * - xfs_end_bio()中会queue_work(i_ioend_work)
+		 *
+		 * v5.4中xfs_end_bio()同时包含了v6.6中xfs_prepare_ioend()和
+		 * iomap_writepage_end_bio()这个函数的动作。当前版本在bio下发时
+		 * 就将两者拆开了；
+		 */
 		error = wpc->ops->prepare_ioend(ioend, error);
 	if (error) {
 		/*

@@ -1460,6 +1460,8 @@ static bool gup_signal_pending(unsigned int flags)
  *
  * Please note that this function, unlike __get_user_pages(), will not return 0
  * for nr_pages > 0, unless FOLL_NOWAIT is used.
+ *
+ * 开启MMU时走这里
  */
 static __always_inline long __get_user_pages_locked(struct mm_struct *mm,
 						unsigned long start,
@@ -1788,6 +1790,9 @@ int __mm_populate(unsigned long start, unsigned long len, int ignore_errors)
 	return ret;	/* 0 or negative error code */
 }
 #else /* CONFIG_MMU */
+/*
+ * 未开启MMU时走这里
+ */
 static long __get_user_pages_locked(struct mm_struct *mm, unsigned long start,
 		unsigned long nr_pages, struct page **pages,
 		int *locked, unsigned int foll_flags)
