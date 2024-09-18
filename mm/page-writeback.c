@@ -2471,6 +2471,9 @@ continue_unlock:
 				goto continue_unlock;
 
 			trace_wbc_writepage(wbc, inode_to_bdi(mapping->host));
+			/*
+			 * iomap_do_writepage()
+			 */
 			error = writepage(folio, wbc, data);
 			nr = folio_nr_pages(folio);
 			if (unlikely(error)) {

@@ -186,9 +186,16 @@ xfs_end_bio(
 	spin_lock_irqsave(&ip->i_ioend_lock, flags);
 	if (list_empty(&ip->i_ioend_list))
 		WARN_ON_ONCE(!queue_work(ip->i_mount->m_unwritten_workqueue,
+		/*
+		 * i_ioend_work == xfs_end_io()
+		 */
 					 &ip->i_ioend_work));
 	list_add_tail(&ioend->io_list, &ip->i_ioend_list);
 	spin_unlock_irqrestore(&ip->i_ioend_lock, flags);
+
+	/*
+	 * 与v5.4中xfs_end_bio()的区别参见iomap_submit_ioend()
+	 */
 }
 
 /*

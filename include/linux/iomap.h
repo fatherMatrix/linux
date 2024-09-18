@@ -328,6 +328,9 @@ struct iomap_writeback_ops {
 struct iomap_writepage_ctx {
 	struct iomap		iomap;
 	struct iomap_ioend	*ioend;
+	/*
+	 * xfs: xfs_writeback_ops
+	 */
 	const struct iomap_writeback_ops *ops;
 };
 
