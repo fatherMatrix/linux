@@ -384,14 +384,21 @@ xfs_alloc_compute_diff(
 	/*
 	 * We want to allocate from the start of a free extent if it is past
 	 * the desired block or if we are allocating user data and the free
-	 * extent is before desired block. The second case is there to allow
-	 * for contiguous allocation from the remaining free space if the file
-	 * grows in the short term.
+	 * extent is before desired block.
+	 *
+	 * The second case is there to allow for contiguous allocation from
+	 * the remaining free space if the file grows in the short term.
 	 */
 	if (freebno >= wantbno || (userdata && freeend < wantend)) {
+	/*
+	 * 这里是the first case
+	 */
 		if ((newbno1 = roundup(freebno, alignment)) >= freeend)
 			newbno1 = NULLAGBLOCK;
 	} else if (freeend >= wantend && alignment > 1) {
+	/*
+	 * 走到这里，一定有freebno < wantbno
+	 */
 		newbno1 = roundup(wantbno, alignment);
 		newbno2 = newbno1 - alignment;
 		if (newbno1 >= freeend)
@@ -430,6 +437,7 @@ xfs_alloc_compute_diff(
  * len should be k * prod + mod for some k.
  * If len is too small it is returned unchanged.
  * If len hits maxlen it is left alone.
+ * - 就是将分配出来的len截成多个stripe align和一个或者0个offset不对齐导致的零头
  */
 STATIC void
 xfs_alloc_fix_len(
@@ -919,6 +927,10 @@ xfs_alloc_cur_check(
 		goto out;
 
 	args->len = XFS_EXTLEN_MIN(lena, args->maxlen);
+	/*
+	 * 上面做了>= args->minlen的检查，因此这里找到的所有extents都是符合最基本
+	 * 的长度要求的
+	 */
 	xfs_alloc_fix_len(args);
 	ASSERT(args->len >= args->minlen);
 	if (args->len < acur->len)
@@ -936,12 +948,17 @@ xfs_alloc_cur_check(
 
 	/*
 	 * Deactivate a bnobt cursor with worse locality than the current best.
+	 * - 对于bnobt，按照bno进行排序，diff表示bno之间的差值，则越过极值点后就
+	 *   会再次搜索肯定会变得更差
 	 */
 	if (diff > acur->diff) {
 		deactivate = isbnobt;
 		goto out;
 	}
 
+	/*
+	 * 走到这里，说明找到了一个更小的diff
+	 */
 	ASSERT(args->len > acur->len ||
 	       (args->len == acur->len && diff <= acur->diff));
 	acur->rec_bno = bno;
@@ -1090,6 +1107,9 @@ xfs_alloc_ag_vextent_small(
 	 * the tree. Try the AGFL if the cntbt is empty, otherwise fail the
 	 * allocation. Make sure to respect minleft even when pulling from the
 	 * freelist.
+	 *
+	 * 首先尝试cntbt的最后一个extent
+	 * - 因为这个extent一定是最长的空闲extent，如果这个都满足不了，那就都不行了
 	 */
 	if (ccur)
 		error = xfs_btree_decrement(ccur, 0, &i);
@@ -1111,6 +1131,9 @@ xfs_alloc_ag_vextent_small(
 	    be32_to_cpu(agf->agf_flcount) <= args->minleft)
 		goto out;
 
+	/*
+	 * 空闲bt中已经找不到合适的了，只能考虑从freelist中拿了
+	 */
 	error = xfs_alloc_get_freelist(args->pag, args->tp, args->agbp,
 			&fbno, 0);
 	if (error)
@@ -1243,6 +1266,10 @@ xfs_alloc_ag_vextent_exact(
 	tend = tbno + tlen;
 	if (tend < args->agbno + args->minlen)
 		goto not_found;
+
+	/*
+	 * 找到的extent覆盖[args->agbno, args->agbno + args->minlen]
+	 */
 
 	/*
 	 * End of extent will be smaller of the freespace end and the
@@ -1512,6 +1539,10 @@ xfs_alloc_ag_vextent_lastblock(
 			return 0;
 	}
 
+	/*
+	 * 第4个参数为true，表示在最后一个B+树block中向右搜索
+	 * - 这里搜索数量最多就是一个block中的所有record
+	 */
 	error = xfs_alloc_walk_iter(args, acur, acur->cnt, true, false, -1, &i);
 	if (error)
 		return error;
@@ -1568,6 +1599,10 @@ restart:
 	 */
 	error = xfs_alloc_cur_setup(args, &acur);
 	if (error == -ENOSPC) {
+	/*
+	 * -ENOSPC表明xfs_alloc_cur_setup()中没有找到greater than目标长度的,
+	 * 选择最右侧的entry
+	 */
 		error = xfs_alloc_ag_vextent_small(args, acur.cnt, &bno,
 				&len, &i);
 		if (error)
@@ -1588,6 +1623,9 @@ restart:
 	 * near the right edge of the tree.  If it's in the last btree leaf
 	 * block, then we just examine all the entries in that block
 	 * that are big enough, and pick the best one.
+	 * - requested extend过大，导致的结果就是我们到这里时，肯定走了上面
+	 *   的xfs_alloc_ag_vextent_small()函数；
+	 * - 什么是the best one？
 	 */
 	if (xfs_btree_islastblock(acur.cnt, 0)) {
 		bool		allocated = false;
@@ -1603,6 +1641,7 @@ restart:
 	/*
 	 * Second algorithm. Combined cntbt and bnobt search to find ideal
 	 * locality.
+	 * - xfs_alloc_ag_vextent_lastblock()没有分配到我们想要的
 	 */
 	error = xfs_alloc_ag_vextent_locality(args, &acur, &i);
 	if (error)
@@ -1752,6 +1791,8 @@ restart:
 	 * by-size btree.  Now we check to see if the space hits maxlen
 	 * once aligned; if not, we search left for something better.
 	 * This can't happen in the second case above.
+	 *
+	 * - the first case above指的是xfs_alloc_vextent_small()
 	 */
 	rlen = XFS_EXTLEN_MIN(args->maxlen, rlen);
 	if (XFS_IS_CORRUPT(args->mp,
@@ -1762,6 +1803,16 @@ restart:
 		goto error0;
 	}
 	if (rlen < args->maxlen) {
+	/*
+	 * 这里是想看当上面找到的extent在trim busy extents之后剩余长度小于maxlen
+	 * 之后，左侧是否有可以达到maxlen、或者更接近maxlen的extent。
+	 * - 为什么一定是向左寻找，右侧的不是更长吗？
+	 *   > 本if进入肯定是由xfs_alloc_vextent_small()返回后进入的，此时我们拿
+	 *     到的已经是最右侧的extent了；
+	 * - 为什么左侧更短的extents有可能达到maxlen、或者更接近maxlen呢？
+	 *   > 虽然左侧extents长度一定小于等于右侧extents长度，但是这里对比的是
+	 *     trim busy extents之后的长度；
+	 */
 		xfs_agblock_t	bestfbno;
 		xfs_extlen_t	bestflen;
 		xfs_agblock_t	bestrbno;
@@ -1783,6 +1834,13 @@ restart:
 				error = -EFSCORRUPTED;
 				goto error0;
 			}
+			/*
+			 * 如果向左找到的extents在没有做trim busy extents时长度就
+			 * 比当前extents小，那么根本不需要再做尝试了；
+			 * - 这里存在的问题是：当前数据库中已经全部都是实际长度为3
+			 *   的空闲块了，这里的退出条件总是在判断 if (3 < 3)，导致
+			 *   迟迟无法退出。
+			 */
 			if (flen < bestrlen)
 				break;
 			busy = xfs_alloc_compute_aligned(args, fbno, flen,
@@ -1795,6 +1853,10 @@ restart:
 				error = -EFSCORRUPTED;
 				goto error0;
 			}
+			/*
+			 * trim busy extents之后剩余的长度符合要求，目的达成，直接
+			 * 退出循环；
+			 */
 			if (rlen > bestrlen) {
 				bestrlen = rlen;
 				bestrbno = rbno;
@@ -3516,6 +3578,11 @@ restart:
 		 * loop regardless of whether we succeed or not.
 		 */
 		if (args->agno == start_agno && target_agbno) {
+		/*
+		 * start_agno就是target_agbno所在的AG
+		 * - 如果当前的AG是target_agbno所在的AG，则尝试near分配
+		 * - 如果当前的AG不是target_agbno所在的AG，则尝试size分配
+		 */
 			args->agbno = target_agbno;
 			error = xfs_alloc_ag_vextent_near(args, alloc_flags);
 		} else {
@@ -3560,6 +3627,9 @@ int
 xfs_alloc_vextent_start_ag(
 	struct xfs_alloc_arg	*args,
 	xfs_fsblock_t		target)
+/*
+ * target是前面选中的 xfs_bmalloca->blkno
+ */
 {
 	struct xfs_mount	*mp = args->mp;
 	xfs_agnumber_t		minimum_agno;
@@ -3591,6 +3661,9 @@ xfs_alloc_vextent_start_ag(
 		bump_rotor = 1;
 	}
 
+	/*
+	 * start_agno的来源是前面选中的 xfs_bmalloca->blkno
+	 */
 	start_agno = max(minimum_agno, XFS_FSB_TO_AGNO(mp, target));
 	error = xfs_alloc_vextent_iterate_ags(args, minimum_agno, start_agno,
 			XFS_FSB_TO_AGBNO(mp, target), alloc_flags);

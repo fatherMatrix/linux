@@ -33,6 +33,10 @@ struct xfs_bmalloca {
 	int			logflags;/* flags for transaction logging */
 
 	xfs_extlen_t		total;	/* total blocks needed for xaction */
+	/*
+	 * 第一次设置在 xfs_bmapi_allocate() 中；
+	 * - 在 xfs_bmap_btalloc_select_lengths() 中传递给 xfs_alloc_arg->minlen
+	 */
 	xfs_extlen_t		minlen;	/* minimum allocation size (blocks) */
 	xfs_extlen_t		minleft; /* amount must be left after alloc */
 	bool			eof;	/* set if allocating past last extent */

@@ -39,7 +39,16 @@ typedef struct xfs_alloc_arg {
 	xfs_fsblock_t	fsbno;		/* file system block number */
 	xfs_agnumber_t	agno;		/* allocation group number */
 	xfs_agblock_t	agbno;		/* allocation group-relative block # */
+	/*
+	 * 在 xfs_bmap_btalloc_select_lengths() 中被赋值
+	 * - 这个值和 xfs_bmalloca->minlen的关系是？
+	 *   > xfs_alloc_arg->minlen 不能小于 xfs_bmalloca->minlen
+	 */
 	xfs_extlen_t	minlen;		/* minimum size of extent */
+	/*
+	 * 在 xfs_bmap_btalloc() 中被设置为：
+	 * - args.maxlen = min(ap->length, mp->m_ag_max_usable);
+	 */
 	xfs_extlen_t	maxlen;		/* maximum size of extent */
 	xfs_extlen_t	mod;		/* mod value for extent size */
 	xfs_extlen_t	prod;		/* prod value for extent size */

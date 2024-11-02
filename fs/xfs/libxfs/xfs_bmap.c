@@ -3246,6 +3246,9 @@ xfs_bmap_btalloc_select_lengths(
 	if (startag == NULLAGNUMBER)
 		startag = 0;
 
+	/*
+	 * 通过循环所有的AG，找到最长的extents
+	 */
 	*blen = 0;
 	for_each_perag_wrap(mp, startag, agno, pag) {
 		error = xfs_bmap_longest_free_extent(pag, args->tp, blen);
@@ -3258,6 +3261,9 @@ xfs_bmap_btalloc_select_lengths(
 	if (pag)
 		xfs_perag_rele(pag);
 
+	/*
+	 * 选取可能分配到的最大的extents长度作为xfs_alloc_arg->minlen
+	 */
 	args->minlen = xfs_bmap_select_minlen(ap, args, *blen);
 	return error;
 }
@@ -3476,6 +3482,12 @@ xfs_bmap_btalloc_at_eof(
 	 * allocation to extend the file as a contiguous extent. If that fails,
 	 * or it's the first allocation in a file, just try for a stripe aligned
 	 * allocation.
+	 * - 为什么已经有extents的话，就要尝试exact EOF呢？
+	 *   > 是因为前面做过xfs_bmap_adjacent()，且其中对EOF有过优化？
+	 *     o 看样子是的
+	 *
+	 * ap->offset不为0可以证实"there are already extents in the file"吗？如果新文件
+	 * 调用lseek()怎么办？
 	 */
 	if (ap->offset) {
 		xfs_extlen_t	nextminlen = 0;
@@ -3644,6 +3656,9 @@ xfs_bmap_btalloc_best_length(
 	xfs_extlen_t		blen = 0;
 	int			error;
 
+	/*
+	 * 第一次对xfs_bmalloca->blkno做设置，位置为贴近其xfs_inode
+	 */
 	ap->blkno = XFS_INO_TO_FSB(args->mp, ap->ip->i_ino);
 	xfs_bmap_adjacent(ap);
 
@@ -4101,6 +4116,11 @@ xfs_bmapi_allocate(
 	/*
 	 * For the wasdelay case, we could also just allocate the stuff asked
 	 * for in this bmap call but that wouldn't be as good.
+	 * - 上层函数可能指定一个巨大的xfs_bmalloca->length，但实际上我们要根据
+	 *   文件地址空间内的hole或者delay extents来确定本次分配最多可以分配多
+	 *   少连续物理块
+	 *   > 分配多了也没有意义，还是会由于hole或者delay extents的实际长度而
+	 *     断开
 	 */
 	if (bma->wasdel) {
 		bma->length = (xfs_extlen_t)bma->got.br_blockcount;

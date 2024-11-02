@@ -229,6 +229,9 @@ xfs_allocbt_init_ptr_from_cur(
 	ptr->s = agf->agf_roots[cur->bc_btnum];
 }
 
+/*
+ * BNOBT的排序规则是按照startblock的大小顺序
+ */
 STATIC int64_t
 xfs_bnobt_key_diff(
 	struct xfs_btree_cur		*cur,

@@ -1401,6 +1401,9 @@ xlog_cil_push_background(
 	spin_lock(&cil->xc_push_lock);
 	if (cil->xc_push_seq < cil->xc_current_sequence) {
 		cil->xc_push_seq = cil->xc_current_sequence;
+		/*
+		 * push_work是xlog_cil_push_work()
+		 */
 		queue_work(cil->xc_push_wq, &cil->xc_ctx->push_work);
 	}
 
