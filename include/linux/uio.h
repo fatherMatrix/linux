@@ -38,6 +38,10 @@ struct iov_iter_state {
 	unsigned long nr_segs;
 };
 
+/*
+ * 保存读写操作对应数据的内存地址
+ * - kiocb 保存读写操作的文件逻辑地址
+ */
 struct iov_iter {
 	u8 iter_type;
 	bool nofault;

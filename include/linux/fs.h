@@ -364,6 +364,10 @@ struct readahead_control;
 	{ IOCB_ALLOC_CACHE,	"ALLOC_CACHE" }, \
 	{ IOCB_DIO_CALLER_COMP,	"CALLER_COMP" }
 
+/*
+ * 保存读写操作的文件逻辑地址
+ * - iov_iter  保存对应数据的内存地址
+ */
 struct kiocb {
 	struct file		*ki_filp;
 	loff_t			ki_pos;
