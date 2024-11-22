@@ -248,6 +248,9 @@ xfs_iomap_write_direct(
 	unsigned int		dblocks, rblocks;
 	bool			force = false;
 	int			error;
+	/*
+	 * direct io默认使用PREALLOC
+	 */
 	int			bmapi_flags = XFS_BMAPI_PREALLOC;
 	int			nr_exts = XFS_IEXT_ADD_NOSPLIT_CNT;
 

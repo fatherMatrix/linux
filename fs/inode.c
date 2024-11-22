@@ -660,6 +660,9 @@ static void evict(struct inode *inode)
 	 */
 	inode_wait_for_writeback(inode);
 
+	/*
+	 * xfs: NULL
+	 */
 	if (op->evict_inode) {
 		op->evict_inode(inode);
 	} else {
@@ -1741,12 +1744,21 @@ static void iput_final(struct inode *inode)
 
 	WARN_ON(inode->i_state & I_NEW);
 
+	/*
+	 * xfs: xfs_fs_drop_inode()
+	 * ext4: ext4_drop_inode()
+	 */
 	if (op->drop_inode)
 		drop = op->drop_inode(inode);
 	else
 		drop = generic_drop_inode(inode);
 
 	if (!drop &&
+		/*
+		 * drop为0说明nlink不为0且inode处于hashed状态，此时不应该执行后
+		 * 面的evict()，而是应该将该inode放入icache
+		 * > prune_icache_sb()流程负责回收
+		 */
 	    !(inode->i_state & I_DONTCACHE) &&
 	    (sb->s_flags & SB_ACTIVE)) {
 		__inode_add_lru(inode, true);

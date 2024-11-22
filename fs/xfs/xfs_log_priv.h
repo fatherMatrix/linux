@@ -277,6 +277,9 @@ struct xfs_cil {
 	atomic_t		xc_iclog_hdrs;
 	struct workqueue_struct	*xc_push_wq;
 
+	/*
+	 * 用于事务向CIL提交 与 后台push的互斥
+	 */
 	struct rw_semaphore	xc_ctx_lock ____cacheline_aligned_in_smp;
 	struct xfs_cil_ctx	*xc_ctx;
 
@@ -296,6 +299,7 @@ struct xfs_cil {
 	/*
 	 * 指向percpu的xlog_cil_pcp
 	 * - 引入patch：upstream commit af1c2146a50b1ffe7e10cae1f7e64ab56b7f8c1f
+	 * - 主要目的是缓解xc_push_lock的争用
 	 */
 	void __percpu		*xc_pcp;	/* percpu CIL structures */
 } ____cacheline_aligned_in_smp;

@@ -6,9 +6,22 @@
 #include <asm/local.h>
 
 struct disk_stats {
+	/*
+	 * 总用时
+	 * - r_await / w_await
+	 */
 	u64 nsecs[NR_STAT_GROUPS];
+	/*
+	 * 处理的扇区总数
+	 */
 	unsigned long sectors[NR_STAT_GROUPS];
+	/*
+	 * iops
+	 */
 	unsigned long ios[NR_STAT_GROUPS];
+	/*
+	 * 请求合并
+	 */
 	unsigned long merges[NR_STAT_GROUPS];
 	unsigned long io_ticks;
 	local_t in_flight[2];

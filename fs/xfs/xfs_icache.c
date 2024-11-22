@@ -158,6 +158,11 @@ __xfs_inode_free(
 	ASSERT(!ip->i_itemp || list_empty(&ip->i_itemp->ili_item.li_bio_list));
 	XFS_STATS_DEC(ip->i_mount, vn_active);
 
+	/*
+	 * 针对的是哪里的宽限期呢？
+	 * - xfs_inode_free_callback()中要释放诸多数据结构，其中很多都会在各种
+	 *   RCU临界区中使用
+	 */
 	call_rcu(&VFS_I(ip)->i_rcu, xfs_inode_free_callback);
 }
 

@@ -496,6 +496,9 @@ int notify_change(struct mnt_idmap *idmap, struct dentry *dentry,
 		return error;
 
 	if (inode->i_op->setattr)
+		/*
+		 * xfs: xfs_vn_setattr()
+		 */
 		error = inode->i_op->setattr(idmap, dentry, attr);
 	else
 		error = simple_setattr(idmap, dentry, attr);

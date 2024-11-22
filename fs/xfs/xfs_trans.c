@@ -678,6 +678,15 @@ xfs_trans_add_item(
 {
 	ASSERT(lip->li_log == tp->t_mountp->m_log);
 	ASSERT(lip->li_ailp == tp->t_mountp->m_ail);
+	/*
+	 * 这里可以确保的是这个xfs_log_item不与其他xfs_trans关联，其实重点是保证
+	 * 这个xfs_log_item已经脱离了与前一个xfs_trans的关联。
+	 * - 与前一个xfs_trans脱离的动作发生在：
+	 *   > xfs_trans_commit
+	 *       __xfs_trans_commit
+	 *         xlog_cil_commit
+	 *           xfs_trans_del_item
+	 */
 	ASSERT(list_empty(&lip->li_trans));
 	ASSERT(!test_bit(XFS_LI_DIRTY, &lip->li_flags));
 

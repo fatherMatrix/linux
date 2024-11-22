@@ -880,6 +880,9 @@ restart:
 
 		/* Wait until the LSN for the record has been recorded. */
 		switch (record) {
+		/*
+		 * bugfix: upstream 68a74dcae6737c27b524b680e070fe41f0cad43a
+		 */
 		case _START_RECORD:
 			if (!ctx->start_lsn) {
 				xlog_wait(&cil->xc_start_wait, &cil->xc_push_lock);
@@ -912,6 +915,9 @@ xlog_cil_write_chain(
 	struct xlog		*log = ctx->cil->xc_log;
 	int			error;
 
+	/*
+	 * 这里是保证xfs_cil中前面的xfs_cil_ctx先写完
+	 */
 	error = xlog_cil_order_write(ctx->cil, ctx->sequence, _START_RECORD);
 	if (error)
 		return error;
@@ -1154,6 +1160,9 @@ xlog_cil_push_work(
 	 * to the new context. The ctx->xc_push_lock provides the serialisation
 	 * necessary for safely using the lockless waitqueue_active() check in
 	 * this context.
+	 *
+	 * 此时我们已经down_write()了xfs_cil->xc_push_lock，因此新的trans无法通
+	 * 过down_read()继而向CIL中进行提交；
 	 */
 	if (waitqueue_active(&cil->xc_push_wait))
 		wake_up_all(&cil->xc_push_wait);
@@ -1263,11 +1272,15 @@ xlog_cil_push_work(
 	error = xlog_cil_write_chain(ctx, num_bytes);
 	/*
 	 * 这个时候会不会太迟了呢？
+	 * - 不会不会
 	 */
 	list_del(&lvhdr.lv_list);
 	if (error)
 		goto out_abort_free_ticket;
 
+	/*
+	 * 写commit record
+	 */
 	error = xlog_cil_write_commit_record(ctx);
 	if (error)
 		goto out_abort_free_ticket;
@@ -1607,7 +1620,16 @@ xlog_cil_commit(
 	 */
 	trace_xfs_trans_commit_items(tp, _RET_IP_);
 	list_for_each_entry_safe(lip, next, &tp->t_items, li_trans) {
+		/*
+		 * xfs_log_item中的内容已经formatting到了xfs_log_iovec中，且
+		 * xfs_log_iovec已经从xfs_log_item中转移到了
+		 * xfs_cil_ctx->lv_chain中。xfs_log_item此时和xfs_trans的绑定关
+		 * 系结束了！
+		 */
 		xfs_trans_del_item(lip);
+		/*
+		 * 一般来说，iop_committing中会执行对item的unlock动作
+		 */
 		if (lip->li_ops->iop_committing)
 			lip->li_ops->iop_committing(lip, cil->xc_ctx->sequence);
 	}
