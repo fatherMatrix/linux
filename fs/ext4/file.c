@@ -213,7 +213,10 @@ ext4_extending_io(struct inode *inode, loff_t offset, size_t len)
 	return false;
 }
 
-/* Is IO overwriting allocated or initialized blocks? */
+/*
+ * Is IO overwriting allocated or initialized blocks?
+ * - 这里指的是全部内容都为已分配
+ */
 static bool ext4_overwrite_io(struct inode *inode,
 			      loff_t pos, loff_t len, bool *unwritten)
 {
@@ -415,6 +418,8 @@ static const struct iomap_dio_ops ext4_dio_write_ops = {
  *   initialized blocks and unwritten blocks. For overwrite unwritten blocks
  *   we protect splitting extents by i_data_sem in ext4_inode_info, so we can
  *   also release exclusive i_rwsem lock.
+ *   > ext4需要这个检查或许是因为他的磁盘块分配是依赖vfs inode中的锁来互斥的；xfs
+ *     应该是用了另一把锁来做互斥；
  *
  * - Otherwise we will switch to exclusive i_rwsem lock.
  */

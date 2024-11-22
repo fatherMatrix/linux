@@ -51,6 +51,7 @@
  * block_size % 12 >= 4 for at least all powers of 2 greater than 512, which
  * covers all valid ext4 block sizes.  Therefore, this tail structure can be
  * crammed into the end of the block without having to rebalance the tree.
+ * - ext4所有btree node的tail
  */
 struct ext4_extent_tail {
 	__le32	et_checksum;	/* crc32c(uuid+inum+extent_block) */
@@ -59,6 +60,7 @@ struct ext4_extent_tail {
 /*
  * This is the extent on-disk structure.
  * It's used at the bottom of the tree.
+ * - ext4 btree中的leaf node的元素
  */
 struct ext4_extent {
 	__le32	ee_block;	/* first logical block extent covers */
@@ -70,6 +72,7 @@ struct ext4_extent {
 /*
  * This is index on-disk structure.
  * It's used at all the levels except the bottom.
+ * - ext4 btree中的internal node的元素
  */
 struct ext4_extent_idx {
 	__le32	ei_block;	/* index covers logical blocks from 'block' */
@@ -81,6 +84,7 @@ struct ext4_extent_idx {
 
 /*
  * Each block (leaves and indexes), even inode-stored has header.
+ * - ext4所有btree node的header
  */
 struct ext4_extent_header {
 	__le16	eh_magic;	/* probably will support different formats */

@@ -75,6 +75,15 @@ int iomap_iter(struct iomap_iter *iter, const struct iomap_ops *ops)
 {
 	int ret;
 
+	/*
+	 * xfs direct write: .iomap_end = NULL
+	 *
+	 * ext4 direct write:
+	 * - ext4_iomap_ops.ext4_iomap_end()
+	 * - ext4_iomap_overwrite_ops.ext4_iomap_overwrite_end()
+	 *
+	 * iomap_iter.iomap是内嵌结构体，第一次进入本函数时iomap.length为0
+	 */
 	if (iter->iomap.length && ops->iomap_end) {
 		ret = ops->iomap_end(iter->inode, iter->pos, iomap_length(iter),
 				iter->processed > 0 ? iter->processed : 0,
@@ -88,6 +97,14 @@ int iomap_iter(struct iomap_iter *iter, const struct iomap_ops *ops)
 	if (ret <= 0)
 		return ret;
 
+	/*
+	 * xfs direct write: xfs_direct_write_iomap_ops.xfs_direct_write_iomap_begin()
+	 * xfs direct read:
+	 *
+	 * ext4 direct write:
+	 * - ext4_iomap_ops.ext4_iomap_begin()
+	 * - ext4_iomap_overwrite_ops.ext4_iomap_overwrite_begin()
+	 */
 	ret = ops->iomap_begin(iter->inode, iter->pos, iter->len, iter->flags,
 			       &iter->iomap, &iter->srcmap);
 	if (ret < 0)

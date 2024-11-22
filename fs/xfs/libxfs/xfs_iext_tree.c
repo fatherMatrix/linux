@@ -132,8 +132,16 @@ inline xfs_extnum_t xfs_iext_count(struct xfs_ifork *ifp)
 
 static inline int xfs_iext_max_recs(struct xfs_ifork *ifp)
 {
+	/*
+	 * if_heigth == 1时，说明整棵树上只有一个leaf node，且该leaf node处于不满
+	 * 的状态，因此只能计算其到底有多少个元素；
+	 */
 	if (ifp->if_height == 1)
 		return xfs_iext_count(ifp);
+	/*
+	 * if_height != 1时，说明leaf node肯定是满的？
+	 * - 不是吧，B+树在leaf node分裂后是可以不满的吧？
+	 */
 	return RECS_PER_LEAF;
 }
 

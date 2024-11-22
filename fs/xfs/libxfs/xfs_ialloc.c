@@ -1744,8 +1744,15 @@ xfs_dialloc_good_ag(
 			return false;
 	}
 
+	/*
+	 * 本AG中还有包含空闲inode的inode chunk，可以直接用于分配
+	 */
 	if (pag->pagi_freecount)
 		return true;
+	/*
+	 * 本AG中没有包含空闲inode的inode chunk，需要先分配新的inode chunk。如
+	 * 果此时不能进行分配，则返回false，说明此AG不能用于本次inode分配；
+	 */
 	if (!ok_alloc)
 		return false;
 
@@ -2503,6 +2510,9 @@ xfs_imap(
 	 * smaller we get to the buffer by simple arithmetics.
 	 */
 	if (M_IGEO(mp)->blocks_per_cluster == 1) {
+		/*
+		 * offset是一个xfs_inode在所处于的block中的第N个
+		 */
 		offset = XFS_INO_TO_OFFSET(mp, ino);
 		ASSERT(offset < mp->m_sb.sb_inopblock);
 

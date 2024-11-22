@@ -216,6 +216,10 @@ struct xfs_ino_geometry {
 	/* stripe unit inode alignment */
 	unsigned int	ialloc_align;
 
+	/*
+	 * 默认值：igeo->agino_log = sbp->sb_inopblog + sbp->sb_agblklog
+	 * - 参见：xfs_ialloc_setup_geometry()
+	 */
 	unsigned int	agino_log;	/* #bits for agino in inum */
 
 	/* precomputed default inode attribute fork offset */

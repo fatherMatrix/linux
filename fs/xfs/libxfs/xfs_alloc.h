@@ -46,10 +46,19 @@ typedef struct xfs_alloc_arg {
 	 */
 	xfs_extlen_t	minlen;		/* minimum size of extent */
 	xfs_extlen_t	maxlen;		/* maximum size of extent */
+	/*
+	 * 这两个是用户写文件时的长度align
+	 * - 更新位置： xfs_bmap_compute_alignments()
+	 */
 	xfs_extlen_t	mod;		/* mod value for extent size */
 	xfs_extlen_t	prod;		/* prod value for extent size */
 	xfs_extlen_t	minleft;	/* min blocks must be left after us */
 	xfs_extlen_t	total;		/* total blocks needed in xaction */
+	/*
+	 * 这个是分配磁盘块的起始地址的align？
+	 * - 这个似乎只有在做某些特殊分配时才会手动指定
+	 *   > 参见： xfs_ialloc_ag_alloc()
+	 */
 	xfs_extlen_t	alignment;	/* align answer to multiple of this */
 	xfs_extlen_t	minalignslop;	/* slop for minlen+alignment calcs */
 	xfs_agblock_t	min_agbno;	/* set an agbno range for NEAR allocs */

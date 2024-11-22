@@ -393,9 +393,27 @@ xfs_alloc_compute_diff(
 	 * grows in the short term.
 	 */
 	if (freebno >= wantbno || (userdata && freeend < wantend)) {
+	/*
+	 * freebno >= wantbno的情况：
+	 * - wwwwwwwwwwwwwwwwwwwwww
+	 *    ffffffffffffffffffffff...
+	 *
+	 * userdata && freeend < wantend的情况：
+	 * -    wwwwwwwwwwwwwwwwwwwwww
+	 *  ...ffffffffffffffffffffff
+	 */
+		/*
+		 * 对freebno做roundup()后，长度还满足要求吗？
+		 * - 有可能不行了，这里有bug :)
+		 */
 		if ((newbno1 = roundup(freebno, alignment)) >= freeend)
 			newbno1 = NULLAGBLOCK;
 	} else if (freeend >= wantend && alignment > 1) {
+	/*
+	 * 进来的前提是freebno < wantbno
+	 * -     wwwwwwwwwwwwwwwwwwwwwww
+	 *   ...ffffffffffffffffffffffff...
+	 */
 		newbno1 = roundup(wantbno, alignment);
 		newbno2 = newbno1 - alignment;
 		if (newbno1 >= freeend)
@@ -415,15 +433,31 @@ xfs_alloc_compute_diff(
 		} else if (newbno2 != NULLAGBLOCK)
 			newbno1 = newbno2;
 	} else if (freeend >= wantend) {
+	/*
+	 * alignment == 1
+	 * -     wwwwwwwwwwwwwwwwwwwwwww
+	 *   ...ffffffffffffffffffffffff...
+	 */
 		newbno1 = wantbno;
 	} else if (alignment > 1) {
+	/*
+	 * -     wwwwwwwwwwwwwwwwwwwwwww
+	 *   ...fffffffffffffffffffffff
+	 */
 		newbno1 = roundup(freeend - wantlen, alignment);
+		/*
+		 * 这里保证了返回的extent长度是足够的
+		 */
 		if (newbno1 > freeend - wantlen &&
 		    newbno1 - alignment >= freebno)
 			newbno1 -= alignment;
 		else if (newbno1 >= freeend)
 			newbno1 = NULLAGBLOCK;
 	} else
+	/*
+	 * -     wwwwwwwwwwwwwwwwwwwwwww
+	 *   ...fffffffffffffffffffffff
+	 */
 		newbno1 = freeend - wantlen;
 	*newbnop = newbno1;
 	return newbno1 == NULLAGBLOCK ? 0 : XFS_ABSDIFF(newbno1, wantbno);
@@ -930,6 +964,10 @@ struct xfs_alloc_cur {
 	xfs_extlen_t			rec_len;/* extent length */
 	xfs_agblock_t			bno;	/* alloc bno */
 	xfs_extlen_t			len;	/* alloc len */
+	/*
+	 * 在 xfs_alloc_cur_setup() 中将其设置为了-1
+	 * - 但由于diff本身为unsigned，因此相当于将其设置为了最大值
+	 */
 	xfs_extlen_t			diff;	/* diff from search bno */
 	unsigned int			busy_gen;/* busy state */
 	bool				busy;
@@ -1077,6 +1115,13 @@ xfs_alloc_cur_check(
 		goto out;
 	}
 
+	/*
+	 * xfs_alloc_cur->len 保存的是遍历的多个extents中最符合要求的extent的len；
+	 * xfs_alloc_arg->len 保存的是如果按照这个extent分配，能分配到的len；
+	 * - 这里的 xfs_alloc_arg->len 是被用作了一个临时变量，并不符合其定义；
+	 *   当分配结束后，会在 xfs_alloc_cur_finish() 中对xfs_alloc_arg->len进行
+	 *   最后的赋值，使其反应其本来的定义
+	 */
 	ASSERT(args->len > acur->len ||
 	       (args->len == acur->len && diff <= acur->diff));
 	acur->rec_bno = bno;
@@ -1090,6 +1135,7 @@ xfs_alloc_cur_check(
 	 * We're done if we found a perfect allocation. This only deactivates
 	 * the current cursor, but this is just an optimization to terminate a
 	 * cntbt search that otherwise runs to the edge of the tree.
+	 * - 对于cntbt来说，要找到最完美的extent才可以结束
 	 */
 	if (acur->diff == 0 && acur->len == args->maxlen)
 		deactivate = true;
@@ -1171,6 +1217,15 @@ xfs_alloc_cntbt_iter(
 	 * agbno. If it is past agbno, check the previous record too so long as
 	 * the length matches as it may be closer. Don't check a smaller record
 	 * because that could deactivate our cursor.
+	 * - 如果 bno < args->agbno 呢？
+	 *   > xfs_alloc_lookup_ge()返回的record，bno肯定是大于等于agbno的，如果
+	 *     等于的话，那啥都不需要做
+	 *   > 这里的含义是，有可能有一个extent，其len也等于cur_len，但其bno小于
+	 *     agbno，那么上面的xfs_alloc_lookup_ge()会将其排除出去。
+	 *   > 因此这里需要对这种情况进行一次尝试，len == acur->cur_len用来保证
+	 *     长度相等，被排除的原因仅仅是因为bno < agbno
+	 *   > 如果找到的bno本身就小于agbno了，那它就是所有长度合适的extents中的
+	 *     第一个了；
 	 */
 	if (bno > args->agbno) {
 		error = xfs_btree_decrement(cur, 0, &i);
@@ -1240,6 +1295,11 @@ xfs_alloc_ag_vextent_small(
 		goto out;
 	}
 
+	/*
+	 * 走到这里说明整棵cntbt树中完全没有空闲空间了，因此我们只能尝试在AGFL中
+	 * 分配空闲块。但由于AGFL中的空闲块都是长度为1的，所以我们要检查是否符合
+	 * 分配的最低要求；
+	 */
 	if (args->minlen != 1 || args->alignment != 1 ||
 	    args->resv == XFS_AG_RESV_AGFL ||
 	    be32_to_cpu(agf->agf_flcount) <= args->minleft)
@@ -1713,6 +1773,12 @@ restart:
 			trace_xfs_alloc_near_noentry(args);
 			goto out;
 		}
+		/*
+		 * 这里找到的extents有可能是busy的，这里并没有关注这一点，可能
+		 * 是在后面处理了；
+		 * - 对比 xfs_alloc_ag_vextent_size() 中对应位置是处理了busy
+		 *   extents的；
+		 */
 		ASSERT(i == 1);
 	} else if (error) {
 		goto out;

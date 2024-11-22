@@ -231,7 +231,10 @@ struct xfs_btree_level {
 	/* buffer pointer */
 	struct xfs_buf		*bp;
 
-	/* key/record number */
+	/*
+	 * key/record number
+	 * - 从1开始计数，参见： xfs_btree_rec_offset() / xfs_btree_decrement()
+	 */
 	uint16_t		ptr;
 
 	/* readahead info */

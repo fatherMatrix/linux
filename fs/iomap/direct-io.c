@@ -750,6 +750,10 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 			     done_before);
 	if (IS_ERR_OR_NULL(dio))
 		return PTR_ERR_OR_ZERO(dio);
+	/*
+	 * libaio下发的direct io在__iomap_dio_rw()中返回的是 -EIOCBQUEUED，
+	 * 因此不会走到这里来等待；
+	 */
 	return iomap_dio_complete(dio);
 }
 EXPORT_SYMBOL_GPL(iomap_dio_rw);

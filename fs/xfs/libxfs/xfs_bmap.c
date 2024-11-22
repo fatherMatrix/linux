@@ -2970,6 +2970,7 @@ xfs_bmap_extsize_align(
 	/*
 	 * If this request overlaps an existing extent, then don't
 	 * attempt to perform any additional alignment.
+	 * - 如果部分重叠呢？
 	 */
 	if (!delay && !eof &&
 	    (orig_off >= gotp->br_startoff) &&
@@ -2983,6 +2984,9 @@ xfs_bmap_extsize_align(
 	 * the file was previously written with a kernel that didn't
 	 * perform this alignment, or if a truncate shot us in the
 	 * foot.
+	 * - 这里的对齐是向更大的范围对齐
+	 *   > 对offset，向前对齐
+	 *   > 对length，向大对齐
 	 */
 	div_u64_rem(orig_off, extsz, &temp);
 	if (temp) {
@@ -3775,6 +3779,9 @@ xfs_bmap_btalloc(
 		.wasdel		= ap->wasdel,
 		.resv		= XFS_AG_RESV_NONE,
 		.datatype	= ap->datatype,
+		/*
+		 * 默认的对齐值为1
+		 */
 		.alignment	= 1,
 		.minalignslop	= 0,
 	};
@@ -3784,12 +3791,19 @@ xfs_bmap_btalloc(
 	int			stripe_align;
 
 	ASSERT(ap->length);
+	/*
+	 * xfs_bmalloca中的offset和length已经被文件逻辑空间中的extent切割过了
+	 */
 	orig_offset = ap->offset;
 	orig_length = ap->length;
 
 	stripe_align = xfs_bmap_compute_alignments(ap, &args);
 
-	/* Trim the allocation back to the maximum an AG can fit. */
+	/*
+	 * Trim the allocation back to the maximum an AG can fit.
+	 * - 一次磁盘分配只能在一个AG中进行
+	 *   > 但一个大文件写可以分配多次磁盘分配从而放置到多个AG上
+	 */
 	args.maxlen = min(ap->length, mp->m_ag_max_usable);
 
 	if ((ap->datatype & XFS_ALLOC_USERDATA) &&
@@ -3865,6 +3879,9 @@ xfs_bmapi_trim_map(
 		return;
 	}
 
+	/*
+	 * 什么时候会有这种情况呢？
+	 */
 	if (obno > *bno)
 		*bno = obno;
 	ASSERT((*bno >= obno) || (n == 0));
@@ -4278,6 +4295,9 @@ xfs_bmapi_allocate(
 	 * Update our extent pointer, given that xfs_bmap_add_extent_delay_real
 	 * or xfs_bmap_add_extent_hole_real might have merged it into one of
 	 * the neighbouring ones.
+	 * - 上面的xfs_bmap_add_extent_delay_real()/xfs_bmap_add_extent_hole_real()
+	 *   函数可能对bma->got做了前向或后向合并，这里要更新一把bma->got以反应合并
+	 *   后的结果；
 	 */
 	xfs_iext_get_extent(ifp, &bma->icur, &bma->got);
 

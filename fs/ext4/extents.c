@@ -928,7 +928,14 @@ ext4_find_extent(struct inode *inode, ext4_lblk_t block,
 		ext_debug(inode, "depth %d: num %d, max %d\n",
 			  ppos, le16_to_cpu(eh->eh_entries), le16_to_cpu(eh->eh_max));
 
+		/*
+		 * 进行二分查找，将本node内查找到的位置存入ext4_ext_path->p_idx中
+		 */
 		ext4_ext_binsearch_idx(inode, path + ppos, block);
+		/*
+		 * ext4_ext_path->ext4_extent_idx结构体中磁盘地址是切断编码的，因此要
+		 * 解码一下得到磁盘地址；
+		 */
 		path[ppos].p_block = ext4_idx_pblock(path[ppos].p_idx);
 		path[ppos].p_depth = i;
 		path[ppos].p_ext = NULL;

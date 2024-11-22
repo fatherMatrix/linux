@@ -1775,7 +1775,10 @@ xfs_btree_decrement(
 	/* Read-ahead to the left at this level. */
 	xfs_btree_readahead(cur, level, XFS_BTCUR_LEFTRA);
 
-	/* We're done if we remain in the block after the decrement. */
+	/*
+	 * We're done if we remain in the block after the decrement.
+	 * - ptr从1开始计数
+	 */
 	if (--cur->bc_levels[level].ptr > 0)
 		goto out1;
 

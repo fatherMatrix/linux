@@ -1468,6 +1468,9 @@ enum blk_unique_id {
 };
 
 struct block_device_operations {
+	/*
+	 * upstream commit: c62b37d96b6eb3ec5ae4cbe00db107bf15aebc93
+	 */
 	void (*submit_bio)(struct bio *bio);
 	int (*poll_bio)(struct bio *bio, struct io_comp_batch *iob,
 			unsigned int flags);
