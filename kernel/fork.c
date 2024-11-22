@@ -1723,6 +1723,8 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 	 * Are we cloning a kernel thread?
 	 *
 	 * We need to steal a active VM for that..
+	 *
+	 * 内核线程是不需要mm_struct的，其访存只需要有CR3寄存器即可
 	 */
 	oldmm = current->mm;
 	if (!oldmm)

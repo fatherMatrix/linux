@@ -128,6 +128,9 @@ static void pgd_ctor(struct mm_struct *mm, pgd_t *pgd)
 	if (CONFIG_PGTABLE_LEVELS == 2 ||
 	    (CONFIG_PGTABLE_LEVELS == 3 && SHARED_KERNEL_PMD) ||
 	    CONFIG_PGTABLE_LEVELS >= 4) {
+		/*
+		 * 仅拷贝内核态的pgd即可
+		 */
 		clone_pgd_range(pgd + KERNEL_PGD_BOUNDARY,
 				swapper_pg_dir + KERNEL_PGD_BOUNDARY,
 				KERNEL_PGD_PTRS);

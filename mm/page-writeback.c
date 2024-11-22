@@ -2461,6 +2461,11 @@ continue_unlock:
 
 			if (folio_test_writeback(folio)) {
 				if (wbc->sync_mode != WB_SYNC_NONE)
+					/*
+					 * 这里是否可以考虑先把这个page记录下来，
+					 * 先回写后续的page，最后再尝试等待这个page
+					 * 呢？
+					 */
 					folio_wait_writeback(folio);
 				else
 					goto continue_unlock;
