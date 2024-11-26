@@ -1725,6 +1725,8 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 	 * We need to steal a active VM for that..
 	 *
 	 * 内核线程是不需要mm_struct的，其访存只需要有CR3寄存器即可
+	 * - fork过程中，CR3的设置在哪里？
+	 *   > 应该是在TSS？
 	 */
 	oldmm = current->mm;
 	if (!oldmm)

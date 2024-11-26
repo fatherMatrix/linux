@@ -1441,6 +1441,12 @@ xlog_cil_push_background(
 	if (xlog_cil_over_hard_limit(log, space_used)) {
 		trace_xfs_log_cil_wait(log, cil->xc_ctx->ticket);
 		ASSERT(space_used < log->l_logsize);
+		/*
+		 * - upstream commit 0e7ab7efe77451cba4cbecb6c9f5ef83cf32b36b
+		 *   > 引入限速逻辑，避免CIL无限增长从而消耗掉所有的log space
+		 * - upstream commit c7f87f3984cfa1e6d32806a715f35c5947ad9c09
+		 *   > 将xc_push_wait从xfs_cil_ctx移入xfs_cil
+		 */
 		xlog_wait(&cil->xc_push_wait, &cil->xc_push_lock);
 		return;
 	}
