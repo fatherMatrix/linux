@@ -798,6 +798,9 @@ xfs_trans_run_precommits(
 	list_for_each_entry_safe(lip, n, &tp->t_items, li_trans) {
 		if (!test_bit(XFS_LI_DIRTY, &lip->li_flags))
 			continue;
+		/*
+		 * xfs_buf: NULL
+		 */
 		if (lip->li_ops->iop_precommit) {
 			error = lip->li_ops->iop_precommit(tp, lip);
 			if (error)

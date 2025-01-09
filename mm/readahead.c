@@ -156,6 +156,9 @@ static void read_pages(struct readahead_control *rac)
 		psi_memstall_enter(&rac->_pflags);
 	blk_start_plug(&plug);
 
+	/*
+	 * xfs: xfs_vm_readahead()
+	 */
 	if (aops->readahead) {
 		aops->readahead(rac);
 		/*

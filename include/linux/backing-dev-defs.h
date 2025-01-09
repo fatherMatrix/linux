@@ -138,6 +138,10 @@ struct bdi_writeback {
 
 	spinlock_t work_lock;		/* protects work_list & dwork scheduling */
 	struct list_head work_list;
+	/*
+	 * 工作函数是 wb_workfn()
+	 * - 参见 wb_init()
+	 */
 	struct delayed_work dwork;	/* work item used for writeback */
 	struct delayed_work bw_dwork;	/* work item used for bandwidth estimate */
 

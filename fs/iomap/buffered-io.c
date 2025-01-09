@@ -1772,6 +1772,12 @@ static int iomap_add_to_ioend(struct iomap_writepage_ctx *wpc,
 	size_t poff = offset_in_folio(folio, pos);
 	int error;
 
+	/*
+	 * upstream commit 375fabc2dd5b12a4ce53aa8905d329a8132eaa9c
+	 * - 后续问题和讨论：
+	 *   > https://lore.kernel.org/all/20230508172406.1CF3.409509F4@e16-tech.com/
+	 *   > https://lore.kernel.org/all/ZKybxCxzmuI1TFYn@dread.disaster.area/
+	 */
 	if (!wpc->ioend || !iomap_can_add_to_ioend(wpc, pos)) {
 new_ioend:
 		error = iomap_submit_ioend(wpc, 0);
@@ -2000,6 +2006,9 @@ iomap_writepages(struct address_space *mapping, struct writeback_control *wbc,
 			PF_MEMALLOC))
 		return -EIO;
 
+	/*
+	 * xfs: xfs_writeback_ops
+	 */
 	wpc->ops = ops;
 	while ((folio = writeback_iter(mapping, wbc, folio, &error)))
 		error = iomap_writepage_map(wpc, wbc, folio);

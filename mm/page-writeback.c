@@ -2680,6 +2680,10 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
 	wb_bandwidth_estimate_start(wb);
 	while (1) {
 		if (mapping->a_ops->writepages) {
+			/*
+			 * 裸设备： blkdev_writepages()
+			 * xfs: xfs_vm_writepages()
+			 */
 			ret = mapping->a_ops->writepages(mapping, wbc);
 		} else if (mapping->a_ops->writepage) {
 			ret = writeback_use_writepage(mapping, wbc);

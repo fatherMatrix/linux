@@ -2798,6 +2798,9 @@ xfs_btree_alloc_block(
 		return -EFSCORRUPTED;
 	}
 
+	/*
+	 * bmbt: xfs_bmbt_alloc_block()
+	 */
 	error = cur->bc_ops->alloc_block(cur, hint_block, new_block, stat);
 	trace_xfs_btree_alloc_block(cur, new_block, *stat, error);
 	return error;
