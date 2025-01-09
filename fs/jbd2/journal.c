@@ -198,6 +198,9 @@ loop:
 		jbd2_debug(1, "OK, requests differ\n");
 		write_unlock(&journal->j_state_lock);
 		del_timer_sync(&journal->j_commit_timer);
+		/*
+		 * 进行一次事务提交
+		 */
 		jbd2_journal_commit_transaction(journal);
 		write_lock(&journal->j_state_lock);
 		goto loop;
@@ -489,6 +492,9 @@ static int __jbd2_log_start_commit(journal_t *journal, tid_t target)
 			  journal->j_commit_request,
 			  journal->j_commit_sequence);
 		journal->j_running_transaction->t_requested = jiffies;
+		/*
+		 * 唤醒 kjournald2()
+		 */
 		wake_up(&journal->j_wait_commit);
 		return 1;
 	} else if (!tid_geq(journal->j_commit_request, target))
@@ -503,6 +509,9 @@ static int __jbd2_log_start_commit(journal_t *journal, tid_t target)
 	return 0;
 }
 
+/*
+ * 对比 jbd2_journal_start_commit()
+ */
 int jbd2_log_start_commit(journal_t *journal, tid_t tid)
 {
 	int ret;
@@ -693,7 +702,13 @@ int jbd2_log_wait_commit(journal_t *journal, tid_t tid)
 		jbd2_debug(1, "JBD2: want %u, j_commit_sequence=%u\n",
 				  tid, journal->j_commit_sequence);
 		read_unlock(&journal->j_state_lock);
+		/*
+		 * 唤醒 kjournald2()
+		 */
 		wake_up(&journal->j_wait_commit);
+		/*
+		 * kjournald2()的最后会wake_up(j_wait_done_commit)
+		 */
 		wait_event(journal->j_wait_done_commit,
 				!tid_gt(tid, journal->j_commit_sequence));
 		read_lock(&journal->j_state_lock);

@@ -1350,9 +1350,17 @@ void do_user_addr_fault(struct pt_regs *regs,
 	}
 #endif
 
+	/*
+	 * 如果缺页异常发生在内核态，则锁mm_struct，否则锁vma即可
+	 * - 这里的发生在内核态指的是：在执行内核态代码
+	 */
 	if (!(flags & FAULT_FLAG_USER))
 		goto lock_mmap;
 
+	/*
+	 * 读锁定vma：
+	 * - vma_start_read() -> down_read_trylock(vma->vm_lock)
+	 */
 	vma = lock_vma_under_rcu(mm, address);
 	if (!vma)
 		goto lock_mmap;
@@ -1361,6 +1369,9 @@ void do_user_addr_fault(struct pt_regs *regs,
 		vma_end_read(vma);
 		goto lock_mmap;
 	}
+	/*
+	 * 如果缺页时，正在用户态运行，此时可以只锁vma即可，无需锁定mm_struct
+	 */
 	fault = handle_mm_fault(vma, address, flags | FAULT_FLAG_VMA_LOCK, regs);
 	if (!(fault & (VM_FAULT_RETRY | VM_FAULT_COMPLETED)))
 		vma_end_read(vma);
@@ -1369,6 +1380,12 @@ void do_user_addr_fault(struct pt_regs *regs,
 		count_vm_vma_lock_event(VMA_LOCK_SUCCESS);
 		goto done;
 	}
+
+	/*
+	 * 内部返回VM_FAULT_RETRY后，尝试重新获取mm_struct锁，比如：
+	 * - do_shared_fault()
+	 * - ... ...
+	 */
 	count_vm_vma_lock_event(VMA_LOCK_RETRY);
 
 	/* Quick path to respond to signals */
@@ -1402,6 +1419,7 @@ retry:
 	 * make sure we exit gracefully rather than endlessly redo
 	 * the fault.  Since we never set FAULT_FLAG_RETRY_NOWAIT, if
 	 * we get VM_FAULT_RETRY back, the mmap_lock has been unlocked.
+	 * ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 	 *
 	 * Note that handle_userfault() may also release and reacquire mmap_lock
 	 * (and not return with VM_FAULT_RETRY), when returning to userland to

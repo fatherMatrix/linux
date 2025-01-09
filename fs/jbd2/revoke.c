@@ -101,6 +101,9 @@ static struct kmem_cache *jbd2_revoke_table_cache;
 
 struct jbd2_revoke_record_s
 {
+	/*
+	 * 作为链表元素链入 jbd2_revoke_table_s->hash_table
+	 */
 	struct list_head  hash;
 	tid_t		  sequence;	/* Used for recovery only */
 	unsigned long long	  blocknr;
@@ -114,6 +117,9 @@ struct jbd2_revoke_table_s
 	 * for recovery.  Must be a power of two. */
 	int		  hash_size;
 	int		  hash_shift;
+	/*
+	 * 链表数组，每个链表的元素是 jbd2_revoke_record_s->hash
+	 */
 	struct list_head *hash_table;
 };
 
@@ -500,6 +506,9 @@ void jbd2_clear_buffer_revoked_flags(journal_t *journal)
 					      journal->j_blocksize);
 			if (bh) {
 				clear_buffer_revoked(bh);
+				/*
+				 * 对称点在？
+				 */
 				__brelse(bh);
 			}
 		}

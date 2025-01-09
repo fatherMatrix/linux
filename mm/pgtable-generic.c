@@ -319,9 +319,13 @@ pte_t *pte_offset_map_nolock(struct mm_struct *mm, pmd_t *pmd,
  * pte_offset_map_lock(mm, pmd, addr, ptlp), and its internal implementation
  * __pte_offset_map_lock() below, is usually called with the pmd pointer for
  * addr, reached by walking down the mm's pgd, p4d, pud for addr: either while
+ *                                                                ^^^^^^^^^^^^
  * holding mmap_lock or vma lock for read or for write; or in truncate or rmap
+ * ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
  * context, while holding file's i_mmap_lock or anon_vma lock for read (or for
+ * ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  * write). In a few cases, it may be used with pmd pointing to a pmd_t already
+ * ^^^^^^^
  * copied to or constructed on the stack.
  *
  * When successful, it returns the pte pointer for addr, with its page table
@@ -371,6 +375,10 @@ again:
 		return pte;
 	ptl = pte_lockptr(mm, &pmdval);
 	spin_lock(ptl);
+	/*
+	 * 之所以pte这边要加锁后重新尝试，是因为pmd、pte两级都是split lock，不像
+	 * 更高层的page table lock都是mm->page_table_lock同一把锁。
+	 */
 	if (likely(pmd_same(pmdval, pmdp_get_lockless(pmd)))) {
 		*ptlp = ptl;
 		return pte;

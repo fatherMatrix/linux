@@ -291,6 +291,9 @@ static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
 	if (iocb->ki_flags & IOCB_NOWAIT)
 		return -EOPNOTSUPP;
 
+	/*
+	 * 这里和xfs是一样的，buffer io只能加互斥锁，direct io可能加共享锁
+	 */
 	inode_lock(inode);
 	ret = ext4_write_checks(iocb, from);
 	if (ret <= 0)
@@ -587,6 +590,8 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (extend) {
 	/*
 	 * 为啥有extent时，就要将inode添加到orphan list上呢？
+	 * - 跟xfs的defer ops解决的问题一样，某些动作在一个事务中做不完
+	 *   > 参见： Documentation/filesystems/ext4/orphan.rst
 	 */
 		handle = ext4_journal_start(inode, EXT4_HT_INODE, 2);
 		if (IS_ERR(handle)) {

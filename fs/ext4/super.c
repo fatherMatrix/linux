@@ -591,9 +591,19 @@ static int ext4_journal_submit_inode_data_buffers(struct jbd2_inode *jinode)
 	int ret;
 
 	if (ext4_should_journal_data(jinode->i_vfs_inode))
+	/*
+	 * data=journal mode
+	 */
 		ret = ext4_journalled_submit_inode_data_buffers(jinode);
 	else
+	/*
+	 * data=order mode
+	 */
 		ret = ext4_normal_submit_inode_data_buffers(jinode);
+	/*
+	 * data=writeback mode根本不会进入本函数
+	 * - 参见 transaction_s->t_inode_list 注释
+	 */
 	return ret;
 }
 

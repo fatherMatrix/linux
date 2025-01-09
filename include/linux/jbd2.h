@@ -316,6 +316,10 @@ enum jbd_state_bits {
 	BH_JBDPrivateStart,	/* First bit available for private use by FS */
 };
 
+/*
+ * 添加如下几个函数定义，使source insight可以索引到
+ */
+int buffer_jbd(const buffer_head *);
 BUFFER_FNS(JBD, jbd)
 BUFFER_FNS(JWrite, jwrite)
 BUFFER_FNS(JBDDirty, jbddirty)
@@ -474,6 +478,13 @@ struct jbd2_revoke_table_s;
  * in so it can be fixed later.
  */
 
+/*
+ * 该数据结构表示一个原子操作。这个原子操作要么成功，要么失败，不会出现中间状态。
+ * 在一个handle中，可能会修改若干个缓冲区，即buffer_head。
+ *
+ * 但是在handle中并不包含缓冲区，因为handle的主要作用是顺藤摸瓜找到对应的
+ * transaction。缓冲区其实是在transaction中的。
+ */
 struct jbd2_journal_handle
 {
 	union {
@@ -482,7 +493,13 @@ struct jbd2_journal_handle
 		journal_t	*h_journal;
 	};
 
+	/*
+	 * 参见 jbd2__journal_start()
+	 */
 	handle_t		*h_rsv_handle;
+	/*
+	 * 本原子操作的额度，即可以包含的磁盘块数
+	 */
 	int			h_total_credits;
 	int			h_revoke_credits;
 	int			h_revoke_credits_requested;
@@ -490,6 +507,9 @@ struct jbd2_journal_handle
 	int			h_err;
 
 	/* Flags [no locking] */
+	/*
+	 * h_sync表示同步，意思是处理完该原子操作后，立即将所属的transaction提交
+	 */
 	unsigned int	h_sync:		1;
 	unsigned int	h_jdata:	1;
 	unsigned int	h_reserved:	1;
@@ -513,6 +533,21 @@ struct transaction_chp_stats_s {
 	__u32			cs_written;
 	__u32			cs_dropped;
 };
+
+/*
+ * 从 transaction_s 中拷贝出来，使Source Insight能识别到
+ */
+ enum {
+	T_RUNNING,
+	T_LOCKED,
+	T_SWITCH,
+	T_FLUSH,
+	T_COMMIT,
+	T_COMMIT_DFLUSH,
+	T_COMMIT_JFLUSH,
+	T_COMMIT_CALLBACK,
+	T_FINISHED
+} t_state;
 
 /* The transaction_t type is the guts of the journaling mechanism.  It
  * tracks a compound transaction through its various states:
@@ -597,6 +632,8 @@ struct transaction_s
 	/*
 	 * Doubly-linked circular list of all metadata buffers owned by this
 	 * transaction [j_list_lock, no locks needed for jbd2 thread]
+	 * - kjournald2()中处理本链表时，本transaction已经不再接受新的handle，
+	 *   因此不需要保护此链表
 	 */
 	struct journal_head	*t_buffers;
 
@@ -619,6 +656,10 @@ struct transaction_s
 	 * the shadow buffers on this list match each other one for
 	 * one at all times. [j_list_lock, no locks needed for jbd2
 	 * thread]
+	 * - 当metadata被写入到日志中时，数据会被复制一份，放到新的缓冲区中。
+	 *   新的缓冲区进入t_iobuf_list，原来的缓冲区进入t_shadow_list；
+	 *   > t_iobuf_list在最新的版本中已经不再存在，转而变成栈上的临时变量
+	 *     o 参见： jbd2_journal_commit_transaction()
 	 */
 	struct journal_head	*t_shadow_list;
 
@@ -627,6 +668,9 @@ struct transaction_s
 	 * this to track inodes in data=ordered and data=journal mode that
 	 * need special handling on transaction commit; also used by ocfs2.
 	 * [j_list_lock]
+	 * - data=writeback mode时，inode不会插入此链表
+	 *   > 因此 journal_submit_data_buffers() -> ext4_journal_submit_inode_data_buffers()
+	 *     中都未对writeback mode做处理
 	 */
 	struct list_head	t_inode_list;
 
@@ -653,6 +697,8 @@ struct transaction_s
 	/*
 	 * Number of outstanding updates running on this transaction
 	 * [none]
+	 * - 相对于t_handle_count，该值表示当前本事务有多少更新操作还在进行中，
+	 *   操作开始时增加，操作结束时减少
 	 */
 	atomic_t		t_updates;
 
@@ -672,6 +718,8 @@ struct transaction_s
 
 	/*
 	 * How many handles used this transaction? [none]
+	 * - 相对于t_updates，t_handle_count表示本transaction_s中有多少handle_t，
+	 *   只增不减
 	 */
 	atomic_t		t_handle_count;
 
@@ -775,6 +823,7 @@ struct journal_s
 
 	/**
 	 * @j_sb_buffer: The first part of the superblock buffer.
+	 * - 指向日志超级块缓冲区
 	 */
 	struct buffer_head	*j_sb_buffer;
 
@@ -846,6 +895,8 @@ struct journal_s
 
 	/**
 	 * @j_wait_updates: Wait queue to wait for updates to complete.
+	 * - 事务提交时，需要等待本事务中所有handle都运行完成，即t_updates归零。
+	 *   > 唤醒点是： stop_this_handle()
 	 */
 	wait_queue_head_t	j_wait_updates;
 
@@ -877,6 +928,7 @@ struct journal_s
 	 * was moved from jbd2_log_do_checkpoint() to reduce stack
 	 * usage.  Access to this array is controlled by the
 	 * @j_checkpoint_mutex.  [j_checkpoint_mutex]
+	 * - 需要checkpoint的buffer_head会放入此数组
 	 */
 	struct buffer_head	*j_chkpt_bhs[JBD2_NR_BATCH];
 
@@ -1027,6 +1079,7 @@ struct journal_s
 	 * @j_tail_sequence:
 	 *
 	 * Sequence number of the oldest transaction in the log [j_state_lock]
+	 * - 这个不一定是最真实的，只是被记录的
 	 */
 	tid_t			j_tail_sequence;
 
@@ -1110,6 +1163,7 @@ struct journal_s
 
 	/**
 	 * @j_revoke_table: Alternate revoke tables for j_revoke.
+	 * - 初始化参见： jbd2_journal_init_revoke_table()
 	 */
 	struct jbd2_revoke_table_s *j_revoke_table[2];
 
@@ -1373,6 +1427,11 @@ JBD2_FEATURE_INCOMPAT_FUNCS(async_commit,	ASYNC_COMMIT)
 JBD2_FEATURE_INCOMPAT_FUNCS(csum2,		CSUM_V2)
 JBD2_FEATURE_INCOMPAT_FUNCS(csum3,		CSUM_V3)
 JBD2_FEATURE_INCOMPAT_FUNCS(fast_commit,	FAST_COMMIT)
+
+/*
+ * make source insight happly
+ */
+;
 
 /*
  * Journal flag definitions
@@ -1744,8 +1803,7 @@ static inline unsigned long jbd2_log_space_left(journal_t *journal)
 	long free = journal->j_free - 32;
 
 	if (journal->j_committing_transaction) {
-		free -= atomic_read(&journal->
-                        j_committing_transaction->t_outstanding_credits);
+		free -= atomic_read(&journal->j_committing_transaction->t_outstanding_credits);
 	}
 	return max_t(long, free, 0);
 }

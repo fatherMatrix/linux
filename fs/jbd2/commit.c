@@ -222,6 +222,11 @@ static int journal_submit_data_buffers(journal_t *journal,
 		spin_unlock(&journal->j_list_lock);
 		/* submit the inode data buffers. */
 		trace_jbd2_submit_inode_data(jinode->i_vfs_inode);
+		/*
+		 * ext4_journal_submit_inode_data_buffers()
+		 * - 参见： ext4_load_and_init_journal()
+		 * -
+		 */
 		if (journal->j_submit_inode_data_buffers) {
 			err = journal->j_submit_inode_data_buffers(jinode);
 			if (!ret)
@@ -372,7 +377,13 @@ void jbd2_journal_commit_transaction(journal_t *journal)
 	tid_t first_tid;
 	int update_tail;
 	int csum_size = 0;
+	/*
+	 * 和BJ_Shadow链表上的元素一一对应
+	 */
 	LIST_HEAD(io_bufs);
+	/*
+	 * revoke records和descriptor records
+	 */
 	LIST_HEAD(log_bufs);
 
 	if (jbd2_journal_has_csum_v2or3(journal))
@@ -437,6 +448,10 @@ void jbd2_journal_commit_transaction(journal_t *journal)
 	write_lock(&journal->j_state_lock);
 	journal->j_fc_off = 0;
 	J_ASSERT(commit_transaction->t_state == T_RUNNING);
+	/*
+	 * 此时 start_this_handle() -> add_transaction_credits() 侧就无法再
+	 * 将新的handle加入到当前transaction中了
+	 */
 	commit_transaction->t_state = T_LOCKED;
 
 	trace_jbd2_commit_locking(journal, commit_transaction);
@@ -450,7 +465,10 @@ void jbd2_journal_commit_transaction(journal_t *journal)
 	stats.run.rs_running = jbd2_time_diff(commit_transaction->t_start,
 					      stats.run.rs_locked);
 
-	// waits for any t_updates to finish
+	/*
+	 * waits for any t_updates to finish
+	 * - 等待本事务中所有handle运行完毕
+	 */
 	jbd2_journal_wait_updates(journal);
 
 	commit_transaction->t_state = T_SWITCH;
@@ -542,6 +560,8 @@ void jbd2_journal_commit_transaction(journal_t *journal)
 	/*
 	 * Now start flushing things to disk, in the order they appear
 	 * on the transaction lists.  Data blocks go first.
+	 * - 这里是不是可以直接不进去？因为进去后还要拿j_list_lock锁
+	 *   > 不行，因为这里已经释放了j_state_lock锁
 	 */
 	err = journal_submit_data_buffers(journal, commit_transaction);
 	if (err)
@@ -727,6 +747,9 @@ start_journal_io:
 				clear_buffer_dirty(bh);
 				set_buffer_uptodate(bh);
 				bh->b_end_io = journal_end_buffer_io_sync;
+				/*
+				 * 下发当前累积的所有日志buffer_head
+				 */
 				submit_bh(REQ_OP_WRITE | REQ_SYNC, bh);
 			}
 			cond_resched();
@@ -809,7 +832,10 @@ start_journal_io:
 		struct buffer_head *bh = list_entry(io_bufs.prev,
 						    struct buffer_head,
 						    b_assoc_buffers);
-
+		/*
+		 * 局部变量链表io_bufs上的buffer_head都是在上面触发了submit_bh()
+		 * 的，这里要等待其io结束
+		 */
 		wait_on_buffer(bh);
 		cond_resched();
 
@@ -1122,6 +1148,9 @@ restart_loop:
 
 	write_unlock(&journal->j_state_lock);
 
+	/*
+	 * ext4: ext4_journal_commit_callback()
+	 */
 	if (journal->j_commit_callback)
 		journal->j_commit_callback(journal, commit_transaction);
 	if (journal->j_fc_cleanup_callback)

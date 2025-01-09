@@ -32,6 +32,11 @@ struct mnt_pcp {
 struct mountpoint {
 	struct hlist_node m_hash;
 	struct dentry *m_dentry;
+	/*
+	 * 挂载点挂载操作的mount实例，链表头
+	 * - 链表元素是 mount.mnt_mp_list
+	 * - 参见 mnt_set_mountpoint()
+	 */
 	struct hlist_head m_list;
 	int m_count;
 };
@@ -39,6 +44,10 @@ struct mountpoint {
 struct mount {
 	struct hlist_node mnt_hash;
 	struct mount *mnt_parent;
+	/*
+	 * 挂载点
+	 * - mount /dev/vda /data 中的data目录
+	 */
 	struct dentry *mnt_mountpoint;
 	struct vfsmount mnt;
 	union {
@@ -51,8 +60,21 @@ struct mount {
 	int mnt_count;
 	int mnt_writers;
 #endif
+	/*
+	 * 维护树结构
+	 * - 链表元素是 mnt_child
+	 */
 	struct list_head mnt_mounts;	/* list of children, anchored here */
+	/*
+	 * 维护树结构
+	 * - 链表头是 mnt_mounts
+	 */
 	struct list_head mnt_child;	/* and going through their mnt_child */
+	/*
+	 * 一个文件系统（超级块）可以同时被多次挂载到不同的挂载点，每一次挂载
+	 * 都会产生一个mount结构体。同一个超级块被多次挂载产生的多个mount结构
+	 * 体通过mnt_instance字段链入sb->s_mounts链表头
+	 */
 	struct list_head mnt_instance;	/* mount instance on sb->s_mounts */
 	const char *mnt_devname;	/* Name of device e.g. /dev/dsk/hda1 */
 	struct list_head mnt_list;
@@ -64,6 +86,9 @@ struct mount {
 	struct mnt_namespace *mnt_ns;	/* containing namespace */
 	struct mountpoint *mnt_mp;	/* where is it mounted */
 	union {
+		/*
+		 * 链表元素，链表头是 mountpoint->m_list
+		 */
 		struct hlist_node mnt_mp_list;	/* list mounts with the same mountpoint */
 		struct hlist_node mnt_umount;
 	};

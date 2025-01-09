@@ -662,6 +662,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 	uprobe_dup_mmap(oldmm, mm);
 	/*
 	 * Not linked in yet - no deadlock potential:
+	 * - 有必要吗？
 	 */
 	mmap_write_lock_nested(mm, SINGLE_DEPTH_NESTING);
 
@@ -686,6 +687,9 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 	for_each_vma(old_vmi, mpnt) {
 		struct file *file;
 
+		/*
+		 * 排除 handle_mm_fault() 的 vma_read_start() 临界区
+		 */
 		vma_start_write(mpnt);
 		if (mpnt->vm_flags & VM_DONTCOPY) {
 			vm_stat_account(mm, mpnt->vm_flags, -vma_pages(mpnt));
@@ -754,6 +758,10 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 			goto fail_nomem_vmi_store;
 
 		mm->map_count++;
+		/*
+		 * 拷贝用户地址空间的页表
+		 * - 内核地址空间页表的拷贝在 mm_init() 中
+		 */
 		if (!(tmp->vm_flags & VM_WIPEONFORK))
 			retval = copy_page_range(tmp, mpnt);
 
@@ -1678,6 +1686,10 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 	if (!mm)
 		goto fail_nomem;
 
+	/*
+	 * 父进程的mm_struct此时锁定没有？
+	 * - 好像没有呢，此时如果oldmm被更改了，那岂不是拷贝了一个不一致的？
+	 */
 	memcpy(mm, oldmm, sizeof(*mm));
 
 	if (!mm_init(mm, tsk, mm->user_ns))
@@ -1726,13 +1738,17 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 	 *
 	 * 内核线程是不需要mm_struct的，其访存只需要有CR3寄存器即可
 	 * - fork过程中，CR3的设置在哪里？
-	 *   > 应该是在TSS？
+	 *   > context_switch()
+	 *     o 最终是通过mm_struct.pgd构建出来的
 	 */
 	oldmm = current->mm;
 	if (!oldmm)
 		return 0;
 
 	if (clone_flags & CLONE_VM) {
+	/*
+	 * 克隆的是用户态线程，则共有原来的mm_struct
+	 */
 		mmget(oldmm);
 		mm = oldmm;
 	} else {

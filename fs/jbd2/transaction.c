@@ -105,6 +105,10 @@ static void jbd2_get_transaction(journal_t *journal,
 	transaction->t_journal = journal;
 	transaction->t_state = T_RUNNING;
 	transaction->t_start_time = ktime_get();
+	/*
+	 * 本函数进入时，journal_t是被锁的
+	 * - write_lock(j_state_lock)
+	 */
 	transaction->t_tid = journal->j_transaction_sequence++;
 	transaction->t_expires = jiffies + journal->j_commit_interval;
 	atomic_set(&transaction->t_updates, 0);
@@ -121,6 +125,11 @@ static void jbd2_get_transaction(journal_t *journal,
 	add_timer(&journal->j_commit_timer);
 
 	J_ASSERT(journal->j_running_transaction == NULL);
+	/*
+	 * 这里可以推测：ext4同一时刻只能有一个事务在运行？
+	 * - ext4的原子操作的最小单位是handle_t，多个handle_t可以放到同一个
+	 *   transaction_t中，相互之间也不必有关
+	 */
 	journal->j_running_transaction = transaction;
 	transaction->t_max_wait = 0;
 	transaction->t_start = jiffies;
@@ -170,6 +179,10 @@ static void wait_transaction_locked(journal_t *journal)
 
 	prepare_to_wait_exclusive(&journal->j_wait_transaction_locked, &wait,
 			TASK_UNINTERRUPTIBLE);
+	/*
+	 * j_running_transaction->t_tid < j_commit_request->t_tid，说明需要进
+	 * 行一次事务提交
+	 */
 	need_to_start = !tid_geq(journal->j_commit_request, tid);
 	read_unlock(&journal->j_state_lock);
 	if (need_to_start)
@@ -223,6 +236,10 @@ static void sub_reserved_credits(journal_t *journal, int blocks)
  * value, we need to fake out sparse so ti doesn't complain about a
  * locking imbalance.  Callers of add_transaction_credits will need to
  * make a similar accomodation.
+ *
+ * 将 handle_t 中的credits增加到 transaction_s 中
+ * - 如果credits中包括rsv_blocks，还需要将rsv_blocks加入到
+ *   journal_t->j_reserved_credits中
  */
 static int add_transaction_credits(journal_t *journal, int blocks,
 				   int rsv_blocks)
@@ -238,6 +255,9 @@ __must_hold(&journal->j_state_lock)
 	 */
 	if (t->t_state != T_RUNNING) {
 		WARN_ON_ONCE(t->t_state >= T_FLUSH);
+		/*
+		 * 等待journal越过T_LOCKED状态
+		 */
 		wait_transaction_locked(journal);
 		__acquire(&journal->j_state_lock); /* fake out sparse */
 		return 1;
@@ -247,6 +267,9 @@ __must_hold(&journal->j_state_lock)
 	 * If there is not enough space left in the log to write all
 	 * potential buffers requested by this operation, we need to
 	 * stall pending a log checkpoint to free some more log space.
+	 * - 加入本handle后，当前transaction大小是否超过限制
+	 * - 将handle_t中的credits加到transaction_s->t_outstanding_credits中，并
+	 *   返回更新后的t_outstanding_credits
 	 */
 	needed = atomic_add_return(total, &t->t_outstanding_credits);
 	if (needed > journal->j_max_transaction_buffers) {
@@ -254,6 +277,7 @@ __must_hold(&journal->j_state_lock)
 		 * If the current transaction is already too large,
 		 * then start to commit it: we can then go back and
 		 * attach this handle to a new transaction.
+		 * - 当前transaction_s过大了，回退上面的atomic_add()
 		 */
 		atomic_sub(total, &t->t_outstanding_credits);
 
@@ -264,6 +288,9 @@ __must_hold(&journal->j_state_lock)
 		if (atomic_read(&journal->j_reserved_credits) + total >
 		    journal->j_max_transaction_buffers) {
 			read_unlock(&journal->j_state_lock);
+			/*
+			 * CONFIG_DEBUG_LOCK_ALLOC未配置，该语句为空
+			 */
 			jbd2_might_wait_for_commit(journal);
 			wait_event(journal->j_wait_reserved,
 				   atomic_read(&journal->j_reserved_credits) + total <=
@@ -287,6 +314,11 @@ __must_hold(&journal->j_state_lock)
 	 * We must therefore ensure the necessary space in the journal
 	 * *before* starting to dirty potentially checkpointed buffers
 	 * in the new transaction.
+	 *
+	 * 事务提交的代码默认disk log space中有足够的空间
+	 * - 有足够的空间就意味着事务提交的过程中不需要做checkpoint
+	 *   > 因为checkpoint过程中如果有buffer正处于当前commit的事务中，会产生
+	 *     死锁
 	 */
 	if (jbd2_log_space_left(journal) < journal->j_max_transaction_buffers) {
 		atomic_sub(total, &t->t_outstanding_credits);
@@ -295,6 +327,9 @@ __must_hold(&journal->j_state_lock)
 		write_lock(&journal->j_state_lock);
 		if (jbd2_log_space_left(journal) <
 					journal->j_max_transaction_buffers)
+			/*
+			 * 如果需要wait，内部会放锁
+			 */
 			__jbd2_log_wait_for_space(journal);
 		write_unlock(&journal->j_state_lock);
 		__acquire(&journal->j_state_lock); /* fake out sparse */
@@ -305,6 +340,11 @@ __must_hold(&journal->j_state_lock)
 	if (!rsv_blocks)
 		return 0;
 
+	/*
+	 * 如果有rsv_blocks，那么除了将 blocks+rsv_blocks 加入到transaction_s
+	 * 的t_outstanding_credits之外，还需要rsv_blocks单独加入到journal_t的
+	 * j_reserved_credits中
+	 */
 	needed = atomic_add_return(rsv_blocks, &journal->j_reserved_credits);
 	/* We allow at most half of a transaction to be reserved */
 	if (needed > journal->j_max_transaction_buffers / 2) {
@@ -392,7 +432,10 @@ repeat:
 	/*
 	 * Wait on the journal's transaction barrier if necessary. Specifically
 	 * we allow reserved handles to proceed because otherwise commit could
+	 * ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 	 * deadlock on page writeback not being able to complete.
+	 * - 这里的主要作用是：遇见j_barrier_count后要等待
+	 * - 但wait on transaction barrier的过程中，reserved handles可以执行
 	 */
 	if (!handle->h_reserved && journal->j_barrier_count) {
 		read_unlock(&journal->j_state_lock);
@@ -401,17 +444,32 @@ repeat:
 		goto repeat;
 	}
 
+	/*
+	 * 如果journal当前没有对应的正在运行的transaction，则将上面分配的new_transaction
+	 * 初始化后关联给journal
+	 * - j_state_lock 保护临界区
+	 */
 	if (!journal->j_running_transaction) {
 		read_unlock(&journal->j_state_lock);
 		if (!new_transaction)
 			goto alloc_transaction;
 		write_lock(&journal->j_state_lock);
+		/*
+		 * 上面repeat标签下的if检查不需要重新做了吗？
+		 * - 这里写完后要会重新goto repeat，这个时候再检查也是一样的
+		 */
 		if (!journal->j_running_transaction &&
 		    (handle->h_reserved || !journal->j_barrier_count)) {
+			/*
+			 * 将新的transaction_s关联给journal
+			 */
 			jbd2_get_transaction(journal, new_transaction);
 			new_transaction = NULL;
 		}
 		write_unlock(&journal->j_state_lock);
+		/*
+		 * 作用是去repeat标签处重新获取读锁，后面的处理逻辑依赖读锁
+		 */
 		goto repeat;
 	}
 
@@ -425,6 +483,11 @@ repeat:
 			 * j_state_lock on a non-zero return
 			 */
 			__release(&journal->j_state_lock);
+			/*
+			 * add_transaction_credits()返回1表示其内部释放过
+			 * j_state_lock，此时需要从repeat标签处重新获取读
+			 * 锁并进行合法性检查
+			 */
 			goto repeat;
 		}
 	} else {
@@ -458,6 +521,9 @@ repeat:
 		  atomic_read(&transaction->t_outstanding_credits),
 		  jbd2_log_space_left(journal));
 	read_unlock(&journal->j_state_lock);
+	/*
+	 * emmm，有意思了
+	 */
 	current->journal_info = handle;
 
 	rwsem_acquire_read(&journal->j_trans_commit_map, 0, 0, _THIS_IP_);
@@ -482,6 +548,9 @@ static handle_t *new_handle(int nblocks)
 	return handle;
 }
 
+/*
+ * 分配一个handle_t，并将其关联到正在运行的transaction上
+ */
 handle_t *jbd2__journal_start(journal_t *journal, int nblocks, int rsv_blocks,
 			      int revoke_records, gfp_t gfp_mask,
 			      unsigned int type, unsigned int line_no)
@@ -500,9 +569,16 @@ handle_t *jbd2__journal_start(journal_t *journal, int nblocks, int rsv_blocks,
 
 	nblocks += DIV_ROUND_UP(revoke_records,
 				journal->j_revoke_records_per_block);
+	/*
+	 * 如果当前task没有对应handle_t，则创建一个新的
+	 */
 	handle = new_handle(nblocks);
 	if (!handle)
 		return ERR_PTR(-ENOMEM);
+	/*
+	 * handle_t 中还有一个  handle_t 的指针，用于描述rsv_blocks指定的
+	 * 保留磁盘块
+	 */
 	if (rsv_blocks) {
 		handle_t *rsv_handle;
 
@@ -513,10 +589,18 @@ handle_t *jbd2__journal_start(journal_t *journal, int nblocks, int rsv_blocks,
 		}
 		rsv_handle->h_reserved = 1;
 		rsv_handle->h_journal = journal;
+		/*
+		 * rsv_handle->h_rsv_handle是为NULL的
+		 */
 		handle->h_rsv_handle = rsv_handle;
 	}
 	handle->h_revoke_credits = revoke_records;
 
+	/*
+	 * start_this_handle()的主要作用是将handle与当前正在运行的transaction相
+	 * 关联，如果当前没有正在运行的transaction，则创建一个新的并将二者关联
+	 * 起来
+	 */
 	err = start_this_handle(journal, handle, gfp_mask);
 	if (err < 0) {
 		if (handle->h_rsv_handle)
@@ -852,6 +936,9 @@ void jbd2_journal_wait_updates(journal_t *journal)
 		if (!transaction)
 			break;
 
+		/*
+		 * 唤醒点是： stop_this_handle()
+		 */
 		prepare_to_wait(&journal->j_wait_updates, &wait,
 				TASK_UNINTERRUPTIBLE);
 		if (!atomic_read(&transaction->t_updates)) {
@@ -1568,6 +1655,7 @@ int jbd2_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	 * Nobody can take it off again because there is a handle open.
 	 * I _think_ we're OK here with SMP barriers - a mistaken decision will
 	 * result in this test being false, so we go in and take the locks.
+	 * - journal_head属于当前transaction，且在BJ_Metadata链表上
 	 */
 	if (jh->b_transaction == transaction && jh->b_jlist == BJ_Metadata) {
 		JBUFFER_TRACE(jh, "fastpath");
@@ -1595,6 +1683,7 @@ int jbd2_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	 * need to be filed.  Metadata on another transaction's list must
 	 * be committing, and will be refiled once the commit completes:
 	 * leave it alone for now.
+	 * - journal_head不属于当前transaction
 	 */
 	if (jh->b_transaction != transaction) {
 		JBUFFER_TRACE(jh, "already on other transaction");
@@ -1627,6 +1716,10 @@ int jbd2_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	/* That test should have eliminated the following case: */
 	J_ASSERT_JH(jh, jh->b_frozen_data == NULL);
 
+	/*
+	 * 走到这里，说明journal_head属于当前transaction，但不在BJ_Metadata
+	 * 链表上。这里直接将其移动到该链表即可
+	 */
 	JBUFFER_TRACE(jh, "file as BJ_Metadata");
 	spin_lock(&journal->j_list_lock);
 	__jbd2_journal_file_buffer(jh, transaction, BJ_Metadata);
@@ -1887,6 +1980,9 @@ int jbd2_journal_stop(handle_t *handle)
 	 * writes.  No point in waiting for joiners in that case.
 	 *
 	 * Setting max_batch_time to 0 disables this completely.
+	 *
+	 * journal->j_last_sync_writer != current->pid 的含义是：
+	 * - 避免一个不停发出sync io的进程被阻塞
 	 */
 	pid = current->pid;
 	if (handle->h_sync && journal->j_last_sync_writer != pid &&

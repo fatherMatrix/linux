@@ -707,6 +707,10 @@ static bool __is_vma_write_locked(struct vm_area_struct *vma, int *mm_lock_seq)
  * Begin writing to a VMA.
  * Exclude concurrent readers under the per-VMA lock until the currently
  * write-locked mmap_lock is dropped or downgraded.
+ * - 哦，所以说这个函数调用时， mmap_write_lock() 肯定是锁定的，本函数调用的目的
+ *   是互斥掉 vma_start_read() 里的读
+ *   > 释放在 mmap_write_unlock()
+ *   > 感觉这个函数是可以多次重复调用的？
  */
 static inline void vma_start_write(struct vm_area_struct *vma)
 {

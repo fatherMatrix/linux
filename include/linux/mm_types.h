@@ -313,6 +313,9 @@ struct folio {
 				void *private;
 				swp_entry_t swap;
 			};
+			/*
+			 *
+			 */
 			atomic_t _mapcount;
 			atomic_t _refcount;
 #ifdef CONFIG_MEMCG

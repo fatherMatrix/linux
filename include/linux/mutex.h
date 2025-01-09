@@ -188,6 +188,9 @@ extern void mutex_lock_io_nested(struct mutex *lock, unsigned int subclass);
 #define mutex_lock(lock) mutex_lock_nested(lock, 0)
 #define mutex_lock_interruptible(lock) mutex_lock_interruptible_nested(lock, 0)
 #define mutex_lock_killable(lock) mutex_lock_killable_nested(lock, 0)
+/*
+ * 定义了CONFIG_DEBUG_LOCK_ALLOC的版本
+ */
 #define mutex_lock_io(lock) mutex_lock_io_nested(lock, 0)
 
 #define mutex_lock_nest_lock(lock, nest_lock)				\

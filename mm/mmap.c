@@ -2364,8 +2364,14 @@ int __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 		return -ENOMEM;
 
 	if (new_below) {
+	/*
+	 * 新分配的vma承载split产生的前面部分
+	 */
 		new->vm_end = addr;
 	} else {
+	/*
+	 * 新分配的vma承载split产生的后面部分
+	 */
 		new->vm_start = addr;
 		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
 	}
@@ -2398,9 +2404,15 @@ int __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	vma_adjust_trans_huge(vma, vma->vm_start, addr, 0);
 
 	if (new_below) {
+	/*
+	 * 原vma承载split产生的后面部分
+	 */
 		vma->vm_start = addr;
 		vma->vm_pgoff += (addr - new->vm_start) >> PAGE_SHIFT;
 	} else {
+	/*
+	 * 原vma承载split产生的前面部分
+	 */
 		vma->vm_end = addr;
 	}
 

@@ -405,6 +405,12 @@ restart:
 	 * extend EOF. Truncate is locked out at this point, so the EOF can
 	 * not move backwards, only forwards. Hence we only need to take the
 	 * slow path and spin locks when we are at or beyond the current EOF.
+	 *
+	 * 可以不加spin_lock(xfs_inode->i_flags_lock)就检查EOF的原因是：
+	 * - 只有两个地方回更改vfs inode的size，一个是truncate，一个是io完成回调。
+	 *   > truncate会在操作之前会down_write vfs inode->rwsem，即xfs这里的
+	 *     iolock，这里天然互斥 (xfs的iolock就是vfs inode的rwsem)
+	 *   > io完成回调只会增大vfs inode size，不会减小
 	 */
 	if (iocb->ki_pos <= i_size_read(inode))
 		goto out;
@@ -517,6 +523,8 @@ xfs_dio_write_end_io(
 	 * need to take the lock to check this. If we race with an update moving
 	 * EOF, then we'll either still be beyond EOF and need to take the lock,
 	 * or we'll be within EOF and we don't need to take it at all.
+	 *
+	 * 走到这里时，还在IOLOCK临界区内
 	 */
 	if (offset + size <= i_size_read(inode))
 		goto out;
@@ -678,6 +686,10 @@ xfs_file_dio_write(
 	/* direct I/O must be aligned to device logical sector size */
 	if ((iocb->ki_pos | count) & target->bt_logical_sectormask)
 		return -EINVAL;
+	/*
+	 * direct I/O 只需要和底层设备的逻辑扇区大小对齐即可，不要求和文件系统
+	 * 块对齐
+	 */
 	if ((iocb->ki_pos | count) & ip->i_mount->m_blockmask)
 		return xfs_file_dio_write_unaligned(ip, iocb, from);
 	return xfs_file_dio_write_aligned(ip, iocb, from);

@@ -934,11 +934,21 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	if (page)
 		folio = page_folio(page);
 	if (page && folio_test_anon(folio)) {
+	/*
+	 * 匿名页
+	 */
 		/*
 		 * If this page may have been pinned by the parent process,
 		 * copy the page immediately for the child so that we'll always
 		 * guarantee the pinned page won't be randomly replaced in the
 		 * future.
+		 * - 引入时间？
+		 *   > 70e806e4e645 mm: Do early cow for pinned pages during fork() for ptes
+		 * - 为什么引入？
+		 *   > https://lore.kernel.org/lkml/20200811183950.10603-1-peterx@redhat.com/
+		 *     o 链接中描述的情况跟新引入的forced COW配合起来出了问题
+		 * - 什么是force COW?
+		 *   > 17839856fd58 gup: document and work around "COW can break either way" issue
 		 */
 		folio_get(folio);
 		if (unlikely(page_try_dup_anon_rmap(page, false, src_vma))) {
@@ -949,6 +959,9 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		}
 		rss[MM_ANONPAGES]++;
 	} else if (page) {
+	/*
+	 * 文件页
+	 */
 		folio_get(folio);
 		page_dup_file_rmap(page, false);
 		rss[mm_counter_file(page)]++;
@@ -1024,6 +1037,10 @@ again:
 	 * protected by mmap_lock-less collapse skipping areas with anon_vma
 	 * (whereas vma_needs_copy() skips areas without anon_vma).  A rework
 	 * can remove such assumptions later, but this is good enough for now.
+	 * - 下面这两个返回的pte都是page table第一个pte的地址，即这个page table
+	 *   的地址
+	 *   > 很多时候看到pte_t指针，都要考虑它是不是第一个，如果是第一个则表
+	 *     示的table
 	 */
 	dst_pte = pte_alloc_map_lock(dst_mm, dst_pmd, addr, &dst_ptl);
 	if (!dst_pte) {
@@ -1031,6 +1048,9 @@ again:
 		goto out;
 	}
 	src_pte = pte_offset_map_nolock(src_mm, src_pmd, addr, &src_ptl);
+	/*
+	 * 在v5.4中，似乎没有检查这个为NULL？
+	 */
 	if (!src_pte) {
 		pte_unmap_unlock(dst_pte, dst_ptl);
 		/* ret == 0 */
@@ -1101,6 +1121,9 @@ again:
 	} while (dst_pte++, src_pte++, addr += PAGE_SIZE, addr != end);
 
 	arch_leave_lazy_mmu_mode();
+	/*
+	 * 解锁之后，就可以做内存分配了
+	 */
 	pte_unmap_unlock(orig_src_pte, src_ptl);
 	add_mm_rss_vec(dst_mm, rss);
 	pte_unmap_unlock(orig_dst_pte, dst_ptl);
@@ -1252,6 +1275,9 @@ vma_needs_copy(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	if (src_vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP))
 		return true;
 
+	/*
+	 * 匿名页的pte肯定是需要拷贝的
+	 */
 	if (src_vma->anon_vma)
 		return true;
 
@@ -1260,6 +1286,7 @@ vma_needs_copy(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	 * becomes much lighter when there are big shared or private readonly
 	 * mappings. The tradeoff is that copy_page_range is more efficient
 	 * than faulting.
+	 * - 一个例子是文件页
 	 */
 	return false;
 }
@@ -1317,6 +1344,11 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	}
 
 	ret = 0;
+	/*
+	 * pgd是不需要在这里pgd_alloc()的
+	 * - copy_mm() -> dup_mm() -> mm_init() -> mm_alloc_pgd() 中会拷贝父进程内
+	 *   核态范围中的pgd entry
+	 */
 	dst_pgd = pgd_offset(dst_mm, addr);
 	src_pgd = pgd_offset(src_mm, addr);
 	do {
@@ -1406,6 +1438,9 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 
 	tlb_change_page_size(tlb, PAGE_SIZE);
 	init_rss_vec(rss);
+	/*
+	 * 锁住pte lock
+	 */
 	start_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	if (!pte)
 		return addr;
@@ -4139,6 +4174,10 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 		goto release;
 	}
 
+	/*
+	 * 如果该vma所在的mm_struct已经被oom_reaper操作了，则无需再处理
+	 * - oom_reaper操作时对mm_struct加的是读锁
+	 */
 	ret = check_stable_address_space(vma->vm_mm);
 	if (ret)
 		goto release;
@@ -4630,6 +4669,10 @@ static vm_fault_t do_shared_fault(struct vm_fault *vmf)
 	vm_fault_t ret, tmp;
 	struct folio *folio;
 
+	/*
+	 * 如果是VM_SHARED，且此时持有的是vma lock，则返回VM_FAULT_RETRY。在上层
+	 * 重新获取mm_struct的锁后，再重新进来；
+	 */
 	if (vmf->flags & FAULT_FLAG_VMA_LOCK) {
 		vma_end_read(vma);
 		return VM_FAULT_RETRY;
@@ -4968,6 +5011,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 						 vmf->address, &vmf->ptl);
 		if (unlikely(!vmf->pte))
 			return 0;
+		/*
+		 * 获取pte的原值
+		 */
 		vmf->orig_pte = ptep_get_lockless(vmf->pte);
 		vmf->flags |= FAULT_FLAG_ORIG_PTE_VALID;
 
@@ -4977,6 +5023,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		}
 	}
 
+	/*
+	 * 没有page table，需要进行分配
+	 */
 	if (!vmf->pte)
 		return do_pte_missing(vmf);
 
@@ -5025,7 +5074,9 @@ unlock:
 /*
  * On entry, we hold either the VMA lock or the mmap_lock
  * (FAULT_FLAG_VMA_LOCK tells you which).  If VM_FAULT_RETRY is set in
+ *                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
  * the result, the mmap_lock is not held on exit.  See filemap_fault()
+ * ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  * and __folio_lock_or_retry().
  */
 static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
