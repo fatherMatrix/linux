@@ -390,6 +390,8 @@ struct xfs_cil {
  * finding the first situation where a checkpoint size overflow actually
  * occurred. Hence the simple throttle, and an ASSERT check to tell us that
  * we've overrun the max size.
+ *
+ * 108a42358a05 xfs: Lower CIL flush limit for large logs 修改为此版本
  */
 #define XLOG_CIL_SPACE_LIMIT(log)	\
 	min_t(int, (log)->l_logsize >> 3, BBTOB(XLOG_TOTAL_REC_SHIFT(log)) << 4)

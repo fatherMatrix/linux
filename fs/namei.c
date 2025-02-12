@@ -572,9 +572,11 @@ struct nameidata {
 	struct inode	*inode; /* path.dentry.d_inode */
 	unsigned int	flags, state;
 	/*
+	 * seq:      对应nd->path.dentry->d_seq
 	 * next_seq: 其实就是last部分在walk_component()中解析到的子dentry的
 	 * 	     d_seq，在v5.4中是作为临时变量和参数在函数间传递，这里
-	 * 	     将其放入nd而已，无它。
+	 * 	     将其放入nd而已，无它
+	 * m_seq:    保护mount_lock
 	 * r_seq:    保护rename_lock
 	 */
 	unsigned	seq, next_seq, m_seq, r_seq;

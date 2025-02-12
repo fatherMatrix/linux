@@ -77,6 +77,11 @@ struct memblock_type {
 	unsigned long cnt;
 	unsigned long max;
 	phys_addr_t total_size;
+	/*
+	 * 这个数组是静态定义的
+	 * - memblock_memory_init_regions
+	 * - memblock_reserved_init_regions
+	 */
 	struct memblock_region *regions;
 	char *name;
 };

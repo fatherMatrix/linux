@@ -1114,6 +1114,9 @@ void __init setup_arch(char **cmdline_p)
 	cleanup_highmap();
 
 	memblock_set_current_limit(ISA_END_ADDRESS);
+	/*
+	 * 将e820表中的内存全部释放到memblock中
+	 */
 	e820__memblock_setup();
 
 	/*

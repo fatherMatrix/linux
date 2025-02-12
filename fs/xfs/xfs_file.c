@@ -271,6 +271,10 @@ xfs_file_buffered_read(
 
 	trace_xfs_file_buffered_read(iocb, to);
 
+	/*
+	 * 其他文件系统在buffer read的时候，是没有锁定vfs inode的
+	 * - https://lore.kernel.org/linux-xfs/20190325001044.GA23020@dastard/
+	 */
 	ret = xfs_ilock_iocb(iocb, XFS_IOLOCK_SHARED);
 	if (ret)
 		return ret;

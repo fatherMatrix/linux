@@ -175,6 +175,7 @@ static unsigned long __head sme_postprocess_startup(struct boot_params *bp, pmdv
  * that function. Clang actually does not generate them, which leads to
  * boot-time crashes. To work around this problem, every global pointer must
  * be adjusted using fixup_pointer().
+ * - 本文件编译时有-fno-PIE选项
  */
 unsigned long __head __startup_64(unsigned long physaddr,
 				  struct boot_params *bp)

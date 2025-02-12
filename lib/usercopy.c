@@ -7,6 +7,9 @@
 
 /* out-of-line parts */
 
+/*
+ * INLINE_COPY_FRPM_USER依赖CONFIG_UACCESS_MEMORY，这个config是给nommu的架构使用的
+ */
 #ifndef INLINE_COPY_FROM_USER
 unsigned long _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
@@ -17,6 +20,7 @@ unsigned long _copy_from_user(void *to, const void __user *from, unsigned long n
 		 * Ensure that bad access_ok() speculation will not
 		 * lead to nasty side effects *after* the copy is
 		 * finished:
+		 * - upstream commit: 74e19ef0ff8061ef55957c3abd71614ef0f42f47
 		 */
 		barrier_nospec();
 		instrument_copy_from_user_before(to, from, n);

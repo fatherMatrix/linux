@@ -770,6 +770,12 @@ static inline bool fast_dput(struct dentry *dentry)
 	/*
 	 * If we have a d_op->d_delete() operation, we sould not
 	 * let the dentry count go to zero, so use "put_or_lock".
+	 * - 因为../retain_dentry()中会选择是否保留这个dentry在dcache中
+	 *
+	 * 如果dentry->d_lockref > 1，则对其减1并返回1；
+	 * 如果dentry->d_lockref <= 1，则加锁并返回0；
+	 *
+	 * - xfs没有该标记
 	 */
 	if (unlikely(dentry->d_flags & DCACHE_OP_DELETE))
 		return lockref_put_or_lock(&dentry->d_lockref);
@@ -784,6 +790,14 @@ static inline bool fast_dput(struct dentry *dentry)
 	 * If the lockref_put_return() failed due to the lock being held
 	 * by somebody else, the fast path has failed. We will need to
 	 * get the lock, and then check the count again.
+	 *
+	 * lockref_put_return()小于0，说明dentry是被其他内核路径持锁了的，
+	 * 或者该dentry的reflock已经被其他内核路径减到0了，处于删除过程；
+	 * - 这两种情况都需要我们抢到这把锁才能操作；
+	 *
+	 * 如果此时另外持锁的内核路径把该dentry删除了怎么办？
+	 * - fast_dput()函数本身被rcu临界区保护，该dentry该宽限期内不会被
+	 *   释放内存（即便refcount减小为0也要等到宽限期结束才能free）！
 	 */
 	if (unlikely(ret < 0)) {
 		spin_lock(&dentry->d_lock);
@@ -897,6 +911,10 @@ void dput(struct dentry *dentry)
 		might_sleep();
 
 		rcu_read_lock();
+		/*
+		 * - 返回true表示成功减小其引用计数
+		 * - 返回false表示没成功，但此时本内核路径已经持有了该dentry的lock
+		 */
 		if (likely(fast_dput(dentry))) {
 			rcu_read_unlock();
 			return;
@@ -905,6 +923,16 @@ void dput(struct dentry *dentry)
 		/* Slow case: now with the dentry lock held */
 		rcu_read_unlock();
 
+		/*
+		 * 返回true表示缓存该dentry到dcache；
+		 * - 但内部还是减小了引用计数的，只是inode还在
+		 * - xfs在这个函数下似乎永远返回true
+		 *   > 对于retain_dentry()返回true的情况，在什么地方实际释放
+		 *     dentry呢？总不能一直保持在内存中吧？
+		 *     o prune_dcache_sb()在内存回收时释放
+		 *
+		 * 返回false表示立即删除该dentry；
+		 */
 		if (likely(retain_dentry(dentry))) {
 			spin_unlock(&dentry->d_lock);
 			return;

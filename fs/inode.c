@@ -306,7 +306,15 @@ static void destroy_inode(struct inode *inode)
 	BUG_ON(!list_empty(&inode->i_lru));
 	__destroy_inode(inode);
 	if (ops->destroy_inode) {
+		/*
+		 * xfs: xfs_fs_destroy_inode()
+		 * ext4: ext4_destroy_inode()
+		 */
 		ops->destroy_inode(inode);
+		/*
+		 * xfs: NULL
+		 * ext4: ext4_free_in_core_inode()
+		 */
 		if (!ops->free_inode)
 			return;
 	}
@@ -1757,7 +1765,9 @@ static void iput_final(struct inode *inode)
 		/*
 		 * drop为0说明nlink不为0且inode处于hashed状态，此时不应该执行后
 		 * 面的evict()，而是应该将该inode放入icache
-		 * > prune_icache_sb()流程负责回收
+		 * - prune_icache_sb()流程负责回收
+		 * - 引用计数都为0了，还能处于inode_hashtable中？
+		 *   > unhash操作是在后面的evict()中进行的
 		 */
 	    !(inode->i_state & I_DONTCACHE) &&
 	    (sb->s_flags & SB_ACTIVE)) {

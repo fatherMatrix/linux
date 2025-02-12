@@ -125,6 +125,9 @@ enum dentry_d_lock_class
 	DENTRY_D_LOCK_NESTED
 };
 
+/*
+ * xfs整体没有这个结构
+ */
 struct dentry_operations {
 	int (*d_revalidate)(struct dentry *, unsigned int);
 	int (*d_weak_revalidate)(struct dentry *, unsigned int);
