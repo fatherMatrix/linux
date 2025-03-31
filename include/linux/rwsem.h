@@ -46,11 +46,29 @@
  * cacheline bouncing problem.
  */
 struct rw_semaphore {
+	/*
+	 * count的结构见下面这几个宏定义处上面的大段注释：
+	 * - RWSEM_WRITER_LOCKED
+	 * - RWSEM_READER_BIAS
+	 * - ... ...
+	 *
+	 * 特殊值：
+	 * - RWSEM_UNLOCKED_VALUE
+	 */
 	atomic_long_t count;
 	/*
 	 * Write owner or one of the read owners as well flags regarding
 	 * the current state of the rwsem. Can be used as a speculative
 	 * check to see if the write owner is running on the cpu.
+	 *
+	 * - 如果写者获取了rw_semaphore，则将其task_struct指针放入owner中；
+	 * - 读者也会将其task_struct指针放入owner中，但因为读者不止一个，所以
+	 *   owner字段中保存的是最后一个获取rw_semaphore的读者；
+	 *   > 如果debug过程中发现只有一个读者，那么这个字段就会很有帮助
+	 * - 最后3bit用于：
+	 *   > RWSEM_READER_OWNED
+	 *   > RWSEM_RD_NONSPINNABLE
+	 *   > RWSEM_WR_NONSPINNABLE
 	 */
 	atomic_long_t owner;
 #ifdef CONFIG_RWSEM_SPIN_ON_OWNER

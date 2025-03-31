@@ -264,6 +264,8 @@ struct css_set {
 	/*
 	 * List running through all cgroup groups in the same hash
 	 * slot. Protected by css_set_lock
+	 * - 作为哈希元素插入 css_set_table
+	 *   > 参见 cgroup_init()
 	 */
 	struct hlist_node hlist;
 

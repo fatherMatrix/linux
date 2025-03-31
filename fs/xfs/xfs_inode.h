@@ -192,6 +192,10 @@ xfs_new_eof(struct xfs_inode *ip, xfs_fsize_t new_size)
 {
 	xfs_fsize_t i_size = i_size_read(VFS_I(ip));
 
+	/*
+	 * 这里会导致一个问题：
+	 * - iomap: fix zero padding data issue in concurrent append writes
+	 */
 	if (new_size > i_size || new_size < 0)
 		new_size = i_size;
 	return new_size > ip->i_disk_size ? new_size : 0;

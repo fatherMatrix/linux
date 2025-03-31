@@ -163,7 +163,10 @@ static struct static_key_true *cgroup_subsys_on_dfl_key[] = {
 
 static DEFINE_PER_CPU(struct cgroup_rstat_cpu, cgrp_dfl_root_rstat_cpu);
 
-/* the default hierarchy */
+/*
+ * the default hierarchy
+ * - 定义中没啥，在 cgroup_init() -> cgroup_setup_root() 中初始化
+ */
 struct cgroup_root cgrp_dfl_root = { .cgrp.rstat_cpu = &cgrp_dfl_root_rstat_cpu };
 EXPORT_SYMBOL_GPL(cgrp_dfl_root);
 
@@ -905,6 +908,8 @@ static void css_set_move_task(struct task_struct *task,
  * account cgroups in empty hierarchies.
  */
 #define CSS_SET_HASH_BITS	7
+/* For Source Insight */
+struct hlist_head css_set_table[];
 static DEFINE_HASHTABLE(css_set_table, CSS_SET_HASH_BITS);
 
 static unsigned long css_set_hash(struct cgroup_subsys_state **css)
@@ -2031,7 +2036,7 @@ void init_cgroup_root(struct cgroup_fs_context *ctx)
 
 int cgroup_setup_root(struct cgroup_root *root, u16 ss_mask)
 {
-	LIST_HEAD(tmp_links);
+	LIST_HEAD(tmp_links); struct list_head tmp_links;
 	struct cgroup *root_cgrp = &root->cgrp;
 	struct kernfs_syscall_ops *kf_sops;
 	struct css_set *cset;

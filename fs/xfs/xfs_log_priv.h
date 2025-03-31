@@ -197,13 +197,21 @@ typedef struct xlog_in_core {
 	struct list_head	ic_callbacks;
 
 	/* reference counts need their own cacheline */
-	atomic_t		ic_refcnt ____cacheline_aligned_in_smp;
+	atomic_t		ic_refcnt; // * For Source Insight *____cacheline_aligned_in_smp;
 	xlog_in_core_2_t	*ic_data;
 #define ic_header	ic_data->hic_header
+	/*
+	 * 这个字段是没有的，这里添加是为了让Source Insight更好的识别上面
+	 * 的那个 #define ic_header
+	 */
+	xlog_rec_header_t	ic_header;
 #ifdef DEBUG
 	bool			ic_fail_crc : 1;
 #endif
 	struct semaphore	ic_sema;
+	/*
+	 * 工作函数是： xlog_ioend_work()
+	 */
 	struct work_struct	ic_end_io_work;
 	struct bio		ic_bio;
 	struct bio_vec		ic_bvec[];

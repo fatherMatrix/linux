@@ -1759,6 +1759,11 @@ iomap_add_to_ioend(struct inode *inode, loff_t pos, struct folio *folio,
 	}
 
 	if (!bio_add_folio(wpc->ioend->io_bio, folio, len, poff)) {
+		/*
+		 * ae5535efd8c445ad6033ac0d5da0197897b148ea之后，已经没必要做bio chain了
+		 * - 以前之所以做bio chain是因为bio_add_page()中限制了不能超过request_queue
+		 *   的限制，但这是很久远的事情了，5.4里就没有这个限制了
+		 */
 		wpc->ioend->io_bio = iomap_chain_bio(wpc->ioend->io_bio);
 		bio_add_folio_nofail(wpc->ioend->io_bio, folio, len, poff);
 	}

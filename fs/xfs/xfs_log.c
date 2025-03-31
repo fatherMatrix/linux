@@ -1835,12 +1835,19 @@ xlog_cksum(
 	return xfs_end_cksum(crc);
 }
 
+/*
+ * log buffer写入log space的完成回调
+ */
 static void
 xlog_bio_end_io(
 	struct bio		*bio)
 {
 	struct xlog_in_core	*iclog = bio->bi_private;
 
+	/*
+	 * 工作函数是： xlog_ioend_work()
+	 * - 参见： xlog_alloc_log()
+	 */
 	queue_work(iclog->ic_log->l_ioend_workqueue,
 		   &iclog->ic_end_io_work);
 }
@@ -2669,6 +2676,13 @@ xlog_get_lowest_lsn(
 		    iclog->ic_state == XLOG_STATE_DIRTY)
 			continue;
 
+		/*
+		 * 本函数的目的是找到以下4种状态中最早的iclog.i_header.h_lsn：
+		 * - XLOG_STATE_WANT_SYNC
+		 * - XLOG_STATE_SYNCING
+		 * - XLOG_STATE_DONE_SYNC
+		 * - XLOG_STATE_CALLBACK
+		 */
 		lsn = be64_to_cpu(iclog->ic_header.h_lsn);
 		if ((lsn && !lowest_lsn) || XFS_LSN_CMP(lsn, lowest_lsn) < 0)
 			lowest_lsn = lsn;
@@ -2749,6 +2763,12 @@ xlog_state_iodone_process_iclog(
 		lowest_lsn = xlog_get_lowest_lsn(log);
 		if (lowest_lsn && XFS_LSN_CMP(lowest_lsn, header_lsn) < 0)
 			return false;
+		/*
+		 * 走到这里，说明当前这个iclog的header_lsn <= lowest_lsn，其实只
+		 * 有等于这种情况。这个是最早的那个iclog，把这个iclog的状态设置
+		 * 为 XLOG_STATE_CALLBACK
+		 * - 我们要安装iclog的先后顺序调用其callback
+		 */
 		xlog_state_set_callback(log, iclog, header_lsn);
 		return false;
 	default:
@@ -2781,6 +2801,9 @@ xlog_state_do_iclog_callbacks(
 	do {
 		LIST_HEAD(cb_list);
 
+		/*
+		 * 该函数返回true表示停止对iclog的处理
+		 */
 		if (xlog_state_iodone_process_iclog(log, iclog))
 			break;
 		/*

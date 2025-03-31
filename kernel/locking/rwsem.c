@@ -242,6 +242,12 @@ static inline bool rwsem_read_trylock(struct rw_semaphore *sem, long *cntp)
 {
 	*cntp = atomic_long_add_return_acquire(RWSEM_READER_BIAS, &sem->count);
 
+	/*
+	 * reader太多了，以至于溢出到最高位了，则停止reader spin
+	 * - 开启reader spin的位置：
+	 *   > rwsem_cond_wake_waiter()
+	 *   > __up_read()
+	 */
 	if (WARN_ON_ONCE(*cntp < 0))
 		rwsem_set_nonspinnable(sem);
 
@@ -348,6 +354,12 @@ struct rwsem_waiter {
 enum rwsem_wake_type {
 	RWSEM_WAKE_ANY,		/* Wake whatever's at head of wait list */
 	RWSEM_WAKE_READERS,	/* Wake readers only */
+	/*
+	 * 在RWSEM_WAKE_READERS场景中，多个reader被唤醒，并且当前很可能是空
+	 * 锁状态，为了防止writer抢锁，因此会先让top waiter持有读锁，然后慢
+	 * 慢处理后续。RWSEM_WAKE_READ_OWNED则没有这个顾虑，因为唤醒者已经
+	 * 持有读锁。
+	 */
 	RWSEM_WAKE_READ_OWNED	/* Waker thread holds the read lock */
 };
 
@@ -400,6 +412,7 @@ rwsem_del_waiter(struct rw_semaphore *sem, struct rwsem_waiter *waiter)
  *   have been set.
  * - there must be someone on the queue
  * - the wait_lock must be held by the caller
+ *   > 此时 wait_list 不会发生变动
  * - tasks are marked for wakeup, the caller must later invoke wake_up_q()
  *   to actually wakeup the blocked task(s) and drop the reference count,
  *   preferably when the wait_lock is released
@@ -424,6 +437,9 @@ static void rwsem_mark_wake(struct rw_semaphore *sem,
 	 */
 	waiter = rwsem_first_waiter(sem);
 
+	/*
+	 * 如果top waiter是writer
+	 */
 	if (waiter->type == RWSEM_WAITING_FOR_WRITE) {
 		if (wake_type == RWSEM_WAKE_ANY) {
 			/*
@@ -437,11 +453,24 @@ static void rwsem_mark_wake(struct rw_semaphore *sem,
 			lockevent_inc(rwsem_wake_writer);
 		}
 
+		/*
+		 * 如果top waiter是writer，则这里一定会返回。即：
+		 * - 如果我们想要唤醒读者，但top waiter是writer，则不做任何唤醒
+		 *   > 这里主要考虑到writer获取锁本来就很难，好不容易排到了，当
+		 *     然不能轻易让出去
+		 * - 如果top waiter不是writer，而是reader，则后续可能唤醒更多越
+		 *   过writer的reader
+		 */
 		return;
 	}
 
 	/*
+	 * 走到这里，说明waiter一定是 RWSEM_WAITING_FOR_READ
+	 */
+
+	/*
 	 * No reader wakeup if there are too many of them already.
+	 * - reader多到溢出到最高位了，不再唤醒新的reader
 	 */
 	if (unlikely(atomic_long_read(&sem->count) < 0))
 		return;
@@ -452,24 +481,40 @@ static void rwsem_mark_wake(struct rw_semaphore *sem,
 	 * so we can bail out early if a writer stole the lock.
 	 */
 	if (wake_type != RWSEM_WAKE_READ_OWNED) {
+	/*
+	 * 此时只有一种可能，即 RWSEM_WAKE_READER ，说明reader还未持锁。所以
+	 * 这里要试图让reader持锁，然后慢慢计算要唤醒多少reader
+	 */
 		struct task_struct *owner;
 
 		adjustment = RWSEM_READER_BIAS;
 		oldcount = atomic_long_fetch_add(adjustment, &sem->count);
 		if (unlikely(oldcount & RWSEM_WRITER_MASK)) {
+		/*
+		 * 如果writer已经steal到了这个锁
+		 */
 			/*
 			 * When we've been waiting "too" long (for writers
 			 * to give up the lock), request a HANDOFF to
 			 * force the issue.
+			 * - 如果我们一直在等待writer放锁，且等了很长时间了，
+			 *   则给count增加RWSEM_FLAG_HANDOFF标记，表示已经有
+			 *   人预定了锁
 			 */
 			if (time_after(jiffies, waiter->timeout)) {
 				if (!(oldcount & RWSEM_FLAG_HANDOFF)) {
 					adjustment -= RWSEM_FLAG_HANDOFF;
 					lockevent_inc(rwsem_rlock_handoff);
 				}
+				/*
+				 * 只有这个waiter可以利用本次 RWSEM_FLAG_HANDOFF
+				 */
 				waiter->handoff_set = true;
 			}
 
+			/*
+			 * 试图持锁失败，因此要删掉前面增加的reader bias
+			 */
 			atomic_long_add(-adjustment, &sem->count);
 			return;
 		}
@@ -508,6 +553,9 @@ static void rwsem_mark_wake(struct rw_semaphore *sem,
 	 */
 	INIT_LIST_HEAD(&wlist);
 	list_for_each_entry_safe(waiter, tmp, &sem->wait_list, list) {
+		/*
+		 * 这种场景下唤醒reader会越过writer
+		 */
 		if (waiter->type == RWSEM_WAITING_FOR_WRITE)
 			continue;
 
@@ -630,6 +678,8 @@ static inline bool rwsem_try_write_lock(struct rw_semaphore *sem,
 			 * A waiter (first or not) can set the handoff bit
 			 * if it is an RT task or wait in the wait queue
 			 * for too long.
+			 * - 锁被别人抢走了，我们要考虑是否在适当的时候设置 handoff以
+			 *   禁止偷锁
 			 */
 			if (has_handoff || (!rt_task(waiter->task) &&
 					    !time_after(jiffies, waiter->timeout)))
@@ -637,6 +687,9 @@ static inline bool rwsem_try_write_lock(struct rw_semaphore *sem,
 
 			new |= RWSEM_FLAG_HANDOFF;
 		} else {
+			/*
+			 * 持锁成功
+			 */
 			new |= RWSEM_WRITER_LOCKED;
 			new &= ~RWSEM_FLAG_HANDOFF;
 
@@ -708,6 +761,9 @@ static inline bool rwsem_can_spin_on_owner(struct rw_semaphore *sem)
 	unsigned long flags;
 	bool ret = true;
 
+	/*
+	 * 如果当前cpu需要调度，则放弃自旋
+	 */
 	if (need_resched()) {
 		lockevent_inc(rwsem_opt_fail);
 		return false;
@@ -720,6 +776,17 @@ static inline bool rwsem_can_spin_on_owner(struct rw_semaphore *sem)
 	owner = rwsem_owner_flags(sem, &flags);
 	/*
 	 * Don't check the read-owner as the entry may be stale.
+	 *
+	 * 如果该rwsem已经禁止了对应的nonspinnable标志，那么肯定是不能乐观自旋了。
+	 * 如果当前rwsem没有禁止，那么需要看看owner的状态：
+	 * - 这里需要特别说明的是：为了方便debug，我们在释放读锁的时候并不会清除
+	 *   owner task。也就是说，对于reader而言，owner中的task信息是最后进入临
+	 *   界区的那个reader，仅此而已，实际这个task可能已经离开临界区，甚至已经
+	 *   销毁都有可能。所以，如果rwsem是reader拥有，那么其实判断owner是否在
+	 *   cpu上运行是没有意义的，因此owner是reader的话是允许进行乐观自旋的
+	 *   （ret的缺省值是true），通过超时来控制自旋的退出。
+	 * - 如果rwsem是writer拥有，那么owner的的确确是正在持锁的线程，如果该线程
+	 *   没有在CPU上运行（不能很快离开临界区），那么也不能乐观自旋。
 	 */
 	if ((flags & RWSEM_NONSPINNABLE) ||
 	    (owner && !(flags & RWSEM_READER_OWNED) && !owner_on_cpu(owner)))
@@ -836,6 +903,9 @@ static bool rwsem_optimistic_spin(struct rw_semaphore *sem)
 	for (;;) {
 		enum owner_state owner_state;
 
+		/*
+		 * 如果owner已经不在cpu上了，则我们也没有自旋的意义了
+		 */
 		owner_state = rwsem_spin_on_owner(sem);
 		if (!(owner_state & OWNER_SPINNABLE))
 			break;
@@ -850,6 +920,7 @@ static bool rwsem_optimistic_spin(struct rw_semaphore *sem)
 
 		/*
 		 * Time-based reader-owned rwsem optimistic spinning
+		 * - 如果owner是reader，则通过时间控制自旋结束
 		 */
 		if (owner_state == OWNER_READER) {
 			/*
@@ -977,12 +1048,26 @@ static inline void rwsem_cond_wake_waiter(struct rw_semaphore *sem, long count,
 {
 	enum rwsem_wake_type wake_type;
 
+	/*
+	 * rwsem_down_read_slowpath() 中释放了reader bias，此时需要kick一下可能的writer。
+	 * 但如果此时writer已经持锁了，则没有唤醒必要了
+	 */
 	if (count & RWSEM_WRITER_MASK)
 		return;
 
 	if (count & RWSEM_READER_MASK) {
+	/*
+	 * 当前为reader持锁
+	 */
 		wake_type = RWSEM_WAKE_READERS;
 	} else {
+	/*
+	 * 如果是空锁状态，我们需要唤醒top waiter（RWSEM_WAKE_ANY，top writer或者reader们）。
+	 * 你可能会疑问：为何空锁还要唤醒等待队列的线程？当前线程快马加鞭去持锁不就OK了吗？
+	 * 这主要是和handoff逻辑相关，这时候更应该持锁的是等待队列中设置了handoff的那个
+	 * waiter，而不是当前writer。如果是reader在临界区内，那么，我们将唤醒本等待队列头部
+	 * 的所有reader（RWSEM_WAKE_READERS）
+	 */
 		wake_type = RWSEM_WAKE_ANY;
 		clear_nonspinnable(sem);
 	}
@@ -1004,6 +1089,24 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int stat
 	 * To prevent a constant stream of readers from starving a sleeping
 	 * waiter, don't attempt optimistic lock stealing if the lock is
 	 * currently owned by readers.
+	 *
+	 * upstream commit id: 2f06f702925b512a95b95dca3855549c047eef58
+	 * subject: locking/rwsem: Prevent potential lock starvation
+	 *
+	 * 如果当前的锁被reader持有，则不再乐观偷锁而是直接进行挂等待队列的操作
+	 * - 因为需要在饿死waiter和reader吞吐量上进行平衡。
+	 *   > 连续的reader持续偷锁的话会饿死等待队列上的任务
+	 *     o reader spin还存在的时候引入的本patch，但对于steal lock依旧成立，
+	 *       两者都会导致handoff bit没有机会设置，进而饿死了wait list上等待
+	 *       的writer。（handoff bit只能在wait list上的waiter被唤醒时才有机
+	 *       会设置）
+	 *   > 唤醒路径上，被唤醒的top reader会顺便将队列中的若干（不大于256个）
+	 *     reader也同时唤醒，以便增加rwsem的吞吐量。所以这里的reader直接挂入
+	 *     队列，累计多个reader以便可以批量唤醒。
+	 * - Reader偷锁的场景主要发生在唤醒top waiter的过程中，这时候临界区没有
+	 *   线程，被唤醒的reader或者writer也没有持锁（writer需要被调度到CPU上执
+	 *   行之后才会试图持锁，高负载的场景下，锁被偷的概率比较大，reader是唤
+	 *   醒后立刻持锁，被偷的几率小一点）。
 	 */
 	if ((atomic_long_read(&sem->owner) & RWSEM_READER_OWNED) &&
 	    (rcnt > 1) && !(count & RWSEM_WRITER_LOCKED))
@@ -1011,14 +1114,34 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int stat
 
 	/*
 	 * Reader optimistic lock stealing.
+	 *
+	 * 所谓偷锁就是不乐观自旋（要有排队），不管先来后到，直接获取锁。即抢先
+	 * top waiter获取锁。具体场景是：
+	 * - 临界区没有writer持锁，也没有设置handoff，正在唤醒top waiter的过程中，
+	 *   并且有任务在等待队列的情况。
+	 * - 这时候进入慢速路径的reader可以先于top waiter唤醒之前把锁偷走。需要
+	 *   特别说明的是：这时候reader counter已经加一，还是尽量让reader偷锁成功，
+	 *   否则还需要回退。
 	 */
 	if (!(count & (RWSEM_WRITER_LOCKED | RWSEM_FLAG_HANDOFF))) {
+		/*
+		 * 由于进入slowpath前，已经对count中的reader count部分加一了，所以
+		 * 这里只需要判断到没有writer持锁，没有handoff，就可以放心地持有
+		 * 读锁。
+		 */
 		rwsem_set_reader_owned(sem);
 		lockevent_inc(rwsem_rlock_steal);
 
 		/*
 		 * Wake up other readers in the wait queue if it is
 		 * the first reader.
+		 *
+		 * 如果偷锁成功并且它是开启此读者临界区第一个reader，那么它还会把等待
+		 * 队列中的reader都唤醒（前提是top waiter不是writer），带领大家一起往
+		 * 前冲（这会打破FIFO的顺序，惩罚了队列中的writer）。
+		 * - 具体是通过rwsem_mark_wake来标记唤醒的reader，然后通过wake_up_q将
+		 *   reader唤醒并进入读临界区。为了减低对等待中的writer线程的影响，这
+		 *   时候对reader的并发是受限的，最多可以唤醒MAX_READERS_WAKEUP个reader。
 		 */
 		if ((rcnt == 1) && (count & RWSEM_FLAG_WAITERS)) {
 			raw_spin_lock_irq(&sem->wait_lock);
@@ -1031,6 +1154,10 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int stat
 		return sem;
 	}
 
+	/*
+	 * 如果人家已经标记了 RWSEM_FLAG_HANDOFF ，则就不能偷锁了
+	 */
+
 queue:
 	waiter.task = current;
 	waiter.type = RWSEM_WAITING_FOR_READ;
@@ -1038,6 +1165,10 @@ queue:
 	waiter.handoff_set = false;
 
 	raw_spin_lock_irq(&sem->wait_lock);
+	/*
+	 * 这里已经持锁了，做最后一次检查，如果可以持锁，则直接持锁返回
+	 * - 毕竟我们已经在count中增加了reader bias
+	 */
 	if (list_empty(&sem->wait_list)) {
 		/*
 		 * In case the wait queue is empty and the lock isn't owned
@@ -1053,13 +1184,22 @@ queue:
 			lockevent_inc(rwsem_rlock_fast);
 			return sem;
 		}
+		/*
+		 * 只能进入wait list了，因此要添加 RWSEM_FLAG_WAITERS 标记
+		 */
 		adjustment += RWSEM_FLAG_WAITERS;
 	}
 	rwsem_add_waiter(sem, &waiter);
 
-	/* we're now waiting on the lock, but no longer actively locking */
+	/*
+	 * we're now waiting on the lock, but no longer actively locking
+	 * - 后续是做休眠等待了，因此要把try lock路径中增加的reader bias删除掉，
+	 *   并增加 RWSEM_FLAG_WAITERS 标记
+	 */
 	count = atomic_long_add_return(adjustment, &sem->count);
-
+	/*
+	 * 上面删除了reader bias，wait list上的writer有机会获取到锁，kick一下
+	 */
 	rwsem_cond_wake_waiter(sem, count, &wake_q);
 	raw_spin_unlock_irq(&sem->wait_lock);
 
@@ -1129,6 +1269,13 @@ rwsem_down_write_slowpath(struct rw_semaphore *sem, int state)
 
 	/* we're now waiting on the lock */
 	if (rwsem_first_waiter(sem) != &waiter) {
+	/*
+	 * 在真正睡眠之前，我们需要做一些唤醒动作（和reader持锁过程类似，有
+	 * 可能在挂入等待队列的时候，临界区线程恰好离开，变成空锁）
+	 * - 如果我们不是wait list上的top waiter，则需要在这里进行这个考虑
+	 * - 如果我们是wait list上的top waiter，则会在下面的for循环中做这个考虑
+	 *
+	 */
 		rwsem_cond_wake_waiter(sem, atomic_long_read(&sem->count),
 				       &wake_q);
 		if (!wake_q_empty(&wake_q)) {
@@ -1141,6 +1288,10 @@ rwsem_down_write_slowpath(struct rw_semaphore *sem, int state)
 			raw_spin_lock_irq(&sem->wait_lock);
 		}
 	} else {
+	/*
+	 * 如果我们是wait list上的top waiter，则直接添加标记表示有waiter后进
+	 * 入睡眠即可
+	 */
 		atomic_long_or(RWSEM_FLAG_WAITERS, &sem->count);
 	}
 
@@ -1343,11 +1494,21 @@ static inline void __up_read(struct rw_semaphore *sem)
 	DEBUG_RWSEMS_WARN_ON(!is_rwsem_reader_owned(sem), sem);
 
 	preempt_disable();
+	/*
+	 * 如果自己是last read owner，则删掉自己
+	 */
 	rwsem_clear_reader_owned(sem);
+	/*
+	 * 在count中减掉自己加上去的reader bias
+	 */
 	tmp = atomic_long_add_return_release(-RWSEM_READER_BIAS, &sem->count);
 	DEBUG_RWSEMS_WARN_ON(tmp < 0, sem);
 	if (unlikely((tmp & (RWSEM_LOCK_MASK|RWSEM_FLAG_WAITERS)) ==
 		      RWSEM_FLAG_WAITERS)) {
+	/*
+	 * 我们是最后一个释放读锁的，此时如果没有任何人持锁，且有waiter，则进行
+	 * 一次唤醒
+	 */
 		clear_nonspinnable(sem);
 		rwsem_wake(sem);
 	}

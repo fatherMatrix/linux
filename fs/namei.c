@@ -1699,6 +1699,9 @@ again:
 			dentry = ERR_PTR(error);
 		}
 	} else {
+		/*
+		 * xfs: xfs_vn_lookup()
+		 */
 		old = inode->i_op->lookup(inode, dentry, flags);
 		d_lookup_done(dentry);
 		if (unlikely(old)) {

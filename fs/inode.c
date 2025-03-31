@@ -54,9 +54,12 @@
  *   inode_hash_lock
  */
 
-static unsigned int i_hash_mask __read_mostly;
-static unsigned int i_hash_shift __read_mostly;
-static struct hlist_head *inode_hashtable __read_mostly;
+static unsigned int i_hash_mask; // __read_mostly;
+static unsigned int i_hash_shift; // __read_mostly;
+/*
+ * key是{superblock, ino}，无需dentry参与
+ */
+static struct hlist_head *inode_hashtable; // __read_mostly;
 static __cacheline_aligned_in_smp DEFINE_SPINLOCK(inode_hash_lock);
 
 /*
