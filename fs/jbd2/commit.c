@@ -378,7 +378,7 @@ void jbd2_journal_commit_transaction(journal_t *journal)
 	int update_tail;
 	int csum_size = 0;
 	/*
-	 * 和BJ_Shadow链表上的元素一一对应
+	 * 和 BJ_Shadow 链表上的元素一一对应
 	 */
 	LIST_HEAD(io_bufs);
 	/*
@@ -419,6 +419,9 @@ void jbd2_journal_commit_transaction(journal_t *journal)
 	write_lock(&journal->j_state_lock);
 	journal->j_flags |= JBD2_FULL_COMMIT_ONGOING;
 	while (journal->j_flags & JBD2_FAST_COMMIT_ONGOING) {
+	/*
+	 * 如果当前fast commit正在进行，则等待所有的fast commit结束
+	 */
 		DEFINE_WAIT(wait);
 
 		prepare_to_wait(&journal->j_fc_wait, &wait,
@@ -493,6 +496,10 @@ void jbd2_journal_commit_transaction(journal_t *journal)
 	 * buffer are perfectly permissible.
 	 * We use journal->j_state_lock here to serialize processing of
 	 * t_reserved_list with eviction of buffers from journal_unmap_buffer().
+	 *
+	 * t_reserved_list链表上是被本transaction管理但并未修改的journal_buffer，
+	 * 既然没有被修改，则不必提交，将其从本transaction的t_reserved_list链表
+	 * 中移除；
 	 */
 	while (commit_transaction->t_reserved_list) {
 		jh = commit_transaction->t_reserved_list;
@@ -532,6 +539,8 @@ void jbd2_journal_commit_transaction(journal_t *journal)
 
 	/*
 	 * Switch to a new revoke table.
+	 *
+	 * 避免发生一边提交，一边被修改的情况
 	 */
 	jbd2_journal_switch_revoke_table(journal);
 

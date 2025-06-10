@@ -87,6 +87,9 @@ osq_wait_next(struct optimistic_spin_queue *lock,
 	return next;
 }
 
+/*
+ * 返回true表示成功获取到osq_lock
+ */
 bool osq_lock(struct optimistic_spin_queue *lock)
 {
 	struct optimistic_spin_node *node = this_cpu_ptr(&osq_node);

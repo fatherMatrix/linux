@@ -1384,6 +1384,7 @@ void do_user_addr_fault(struct pt_regs *regs,
 	/*
 	 * 内部返回VM_FAULT_RETRY后，尝试重新获取mm_struct锁，比如：
 	 * - do_shared_fault()
+	 * - hugetlb_fault()
 	 * - ... ...
 	 */
 	count_vm_vma_lock_event(VMA_LOCK_RETRY);

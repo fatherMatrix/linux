@@ -2940,6 +2940,11 @@ repeat:
 		set_buffer_jbd(bh);
 		bh->b_private = jh;
 		jh->b_bh = bh;
+		/*
+		 * 给buffer_head设置JBD标志时，要增加 buffer_head->b_count
+		 * - 参见本函数上面的大段注释
+		 * - 注意与 journal_head->b_jcount 区分
+		 */
 		get_bh(bh);
 		BUFFER_TRACE(bh, "added journal_head");
 	}

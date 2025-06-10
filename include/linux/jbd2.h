@@ -319,9 +319,11 @@ enum jbd_state_bits {
 /*
  * 添加如下几个函数定义，使source insight可以索引到
  */
-int buffer_jbd(const buffer_head *);
-BUFFER_FNS(JBD, jbd)
-BUFFER_FNS(JWrite, jwrite)
+int buffer_jbd(const struct buffer_head *);	// For Source Insight
+void set_buffer_jbd(struct buffer_head *);
+BUFFER_FNS(JBD, jbd);
+int buffer_jwrite(const struct buffer_head *);	// For Source Insight
+BUFFER_FNS(JWrite, jwrite);
 BUFFER_FNS(JBDDirty, jbddirty)
 TAS_BUFFER_FNS(JBDDirty, jbddirty)
 BUFFER_FNS(Revoked, revoked)
@@ -494,15 +496,22 @@ struct jbd2_journal_handle
 	};
 
 	/*
-	 * 参见 jbd2__journal_start()
+	 * - 参见 jbd2__journal_start()
+	 * - 参见 jbd2_journal_start() 上的注释
+	 *   > 注意 jbd2_journal_start_reserved()
 	 */
 	handle_t		*h_rsv_handle;
 	/*
 	 * 本原子操作的额度，即可以包含的磁盘块数
+	 * - new_handle() 中将其初始化为了 jbd2__start_handle() 的nblock + revoke_blocks
 	 */
 	int			h_total_credits;
 	int			h_revoke_credits;
 	int			h_revoke_credits_requested;
+	/*
+	 * 引用计数， new_handle() 中，如果发现当前进程已经有一个handle了，则增加
+	 * 其引用计数并返回
+	 */
 	int			h_ref;
 	int			h_err;
 
@@ -512,6 +521,10 @@ struct jbd2_journal_handle
 	 */
 	unsigned int	h_sync:		1;
 	unsigned int	h_jdata:	1;
+	/*
+	 * reserve handle会将该位设置为true
+	 * - 参见： jbd2__journal_start()
+	 */
 	unsigned int	h_reserved:	1;
 	unsigned int	h_aborted:	1;
 	unsigned int	h_type:		8;
@@ -535,7 +548,7 @@ struct transaction_chp_stats_s {
 };
 
 /*
- * 从 transaction_s 中拷贝出来，使Source Insight能识别到
+ * 从下面的 transaction_s 中拷贝出来，使Source Insight能识别到
  */
  enum {
 	T_RUNNING,
@@ -669,6 +682,11 @@ struct transaction_s
 	 * need special handling on transaction commit; also used by ocfs2.
 	 * [j_list_lock]
 	 * - data=writeback mode时，inode不会插入此链表
+	 *   > data=journald mode时，在 ext4_journal_folio_buffers() 中将inode插入本链表
+	 *     o 有 ext4_should_journal_data() 控制
+	 *   > data=ordered mode时，在 ext4_map_blocks() -> ext4_jbd2_inode_add_{write,wait}()
+	 *     中将inode插入本链表
+	 *     o 有 ext4_should_order_data() 控制
 	 *   > 因此 journal_submit_data_buffers() -> ext4_journal_submit_inode_data_buffers()
 	 *     中都未对writeback mode做处理
 	 */
@@ -707,6 +725,10 @@ struct transaction_s
 	 * This is including all credits reserved when starting transaction
 	 * handles as well as all journal descriptor blocks needed for this
 	 * transaction. [none]
+	 *
+	 * 属于该 transaction_s 的 handle，会在 add_transaction_credits() 中将
+	 * 自己的credits添加到这里；
+	 * 在 stop_this_handle() 中，将handle没用完的credits在这里减除；
 	 */
 	atomic_t		t_outstanding_credits;
 
@@ -1817,6 +1839,11 @@ static inline unsigned long jbd2_log_space_left(journal_t *journal)
 #define BJ_Metadata	1	/* Normal journaled metadata */
 #define BJ_Forget	2	/* Buffer superseded by this transaction */
 #define BJ_Shadow	3	/* Buffer contents being shadowed to the log */
+/*
+ * 处于该链表上的 journal_head 为被本 transaction_s 管理的 journal_head
+ * - jbd2_journal_get_{create,write}_access()的核心工作就是将journal_head加入到
+ *   本 transaction_s 的 BJ_Reserved 链表上
+ */
 #define BJ_Reserved	4	/* Buffer is reserved for access by journal */
 #define BJ_Types	5
 

@@ -5333,8 +5333,14 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	lru_gen_enter_fault(vma);
 
 	if (unlikely(is_vm_hugetlb_page(vma)))
+	/*
+	 * 传统巨页的异常处理
+	 */
 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
 	else
+	/*
+	 * 普通页、透明巨页THP的异常处理
+	 */
 		ret = __handle_mm_fault(vma, address, flags);
 
 	lru_gen_exit_fault();
@@ -5487,6 +5493,9 @@ struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
 
 	rcu_read_lock();
 retry:
+	/*
+	 * 找到对应的vma
+	 */
 	vma = mas_walk(&mas);
 	if (!vma)
 		goto inval;

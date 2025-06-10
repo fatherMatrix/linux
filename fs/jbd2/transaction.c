@@ -180,7 +180,7 @@ static void wait_transaction_locked(journal_t *journal)
 	prepare_to_wait_exclusive(&journal->j_wait_transaction_locked, &wait,
 			TASK_UNINTERRUPTIBLE);
 	/*
-	 * j_running_transaction->t_tid < j_commit_request->t_tid，说明需要进
+	 * j_commit_request < j_running_transaction->t_tid ，说明需要进
 	 * 行一次事务提交
 	 */
 	need_to_start = !tid_geq(journal->j_commit_request, tid);
@@ -240,6 +240,7 @@ static void sub_reserved_credits(journal_t *journal, int blocks)
  * 将 handle_t 中的credits增加到 transaction_s 中
  * - 如果credits中包括rsv_blocks，还需要将rsv_blocks加入到
  *   journal_t->j_reserved_credits中
+ *   > 为啥一个计入 transaction_s ，一个计入 journal_t 中呢？
  */
 static int add_transaction_credits(journal_t *journal, int blocks,
 				   int rsv_blocks)
@@ -435,6 +436,7 @@ repeat:
 	 * ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 	 * deadlock on page writeback not being able to complete.
 	 * - 这里的主要作用是：遇见j_barrier_count后要等待
+	 *   > 参见： jbd2_journal_lock_updates() / jbd2_journal_unlock_updates()
 	 * - 但wait on transaction barrier的过程中，reserved handles可以执行
 	 */
 	if (!handle->h_reserved && journal->j_barrier_count) {
@@ -476,6 +478,9 @@ repeat:
 	transaction = journal->j_running_transaction;
 
 	if (!handle->h_reserved) {
+	/*
+	 * 非reserve handle
+	 */
 		/* We may have dropped j_state_lock - restart in that case */
 		if (add_transaction_credits(journal, blocks, rsv_blocks)) {
 			/*
@@ -491,6 +496,10 @@ repeat:
 			goto repeat;
 		}
 	} else {
+	/*
+	 * reserve handle，通过 jbd2_journal_start_reserved() -> start_this_handle()
+	 * 路径调用过来的
+	 */
 		/*
 		 * We have handle reserved so we are allowed to join T_LOCKED
 		 * transaction and we don't have to check for transaction size
@@ -567,6 +576,9 @@ handle_t *jbd2__journal_start(journal_t *journal, int nblocks, int rsv_blocks,
 		return handle;
 	}
 
+	/*
+	 * 如果设置了revoke_recoreds，则计算并增加需要的日志块数
+	 */
 	nblocks += DIV_ROUND_UP(revoke_records,
 				journal->j_revoke_records_per_block);
 	/*
@@ -1359,6 +1371,9 @@ int jbd2_journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 {
 	transaction_t *transaction = handle->h_transaction;
 	journal_t *journal;
+	/*
+	 * 给 buffer_head 配置一个对应的 journal_head
+	 */
 	struct journal_head *jh = jbd2_journal_add_journal_head(bh);
 	int err;
 
@@ -1401,6 +1416,9 @@ int jbd2_journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 
 		JBUFFER_TRACE(jh, "file as BJ_Reserved");
 		spin_lock(&journal->j_list_lock);
+		/*
+		 * 将 journal_head 加入 BJ_Reserved 链表
+		 */
 		__jbd2_journal_file_buffer(jh, transaction, BJ_Reserved);
 		spin_unlock(&journal->j_list_lock);
 	} else if (jh->b_transaction == journal->j_committing_transaction) {
@@ -1646,6 +1664,9 @@ int jbd2_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 			goto out_unlock_bh;
 		}
 		jh->b_modified = 1;
+		/*
+		 * 一个buffer_head能且仅能映射一个fsblock
+		 */
 		handle->h_total_credits--;
 	}
 
@@ -2613,6 +2634,11 @@ void __jbd2_journal_file_buffer(struct journal_head *jh,
 			was_dirty = 1;
 	}
 
+	/*
+	 * 本函数的目的是将 journal_head 放到本 transaction_s 中的特定链表上。
+	 * 如果该 journal_head 目前正在另一个 transaction_s 的链表上，则需要先
+	 * 将其摘下，再插入本 transaction_s 的链表中
+	 */
 	if (jh->b_transaction)
 		__jbd2_journal_temp_unlink_buffer(jh);
 	else

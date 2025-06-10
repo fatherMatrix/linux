@@ -3294,6 +3294,9 @@ static int do_new_mount_fc(struct fs_context *fc, struct path *mountpoint,
 static int do_new_mount(struct path *path, const char *fstype, int sb_flags,
 			int mnt_flags, const char *name, void *data)
 {
+	/*
+	 * data中保存的是挂载时的options
+	 */
 	struct file_system_type *type;
 	struct fs_context *fc;
 	const char *subtype = NULL;
@@ -3327,6 +3330,10 @@ static int do_new_mount(struct path *path, const char *fstype, int sb_flags,
 					  subtype, strlen(subtype));
 	if (!err && name)
 		err = vfs_parse_fs_string(fc, "source", name, strlen(name));
+	/*
+	 * 下面也是通过 vfs_parse_fs_string() 来解析众多的key=value
+	 * - 上面两个 vfs_parse_fs_string() 解析的是两个我们急迫关注的key
+	 */
 	if (!err)
 		err = parse_monolithic_mount_data(fc, data);
 	if (!err && !mount_capable(fc))

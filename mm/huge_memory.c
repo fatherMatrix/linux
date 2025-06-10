@@ -581,6 +581,9 @@ void folio_prep_large_rmappable(struct folio *folio)
 {
 	VM_BUG_ON_FOLIO(folio_order(folio) < 2, folio);
 	INIT_LIST_HEAD(&folio->_deferred_list);
+	/*
+	 * 这类函数是由 PAGEFLAG 宏生成的
+	 */
 	folio_set_large_rmappable(folio);
 }
 

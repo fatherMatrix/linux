@@ -698,6 +698,9 @@ out_sem:
 		    !(flags & EXT4_GET_BLOCKS_ZERO) &&
 		    !ext4_is_quota_file(inode) &&
 		    ext4_should_order_data(inode)) {
+		    /*
+		     * 这里只有ordered mode的inode可以进来
+		     */
 			loff_t start_byte =
 				(loff_t)map->m_lblk << inode->i_blkbits;
 			loff_t length = (loff_t)map->m_len << inode->i_blkbits;

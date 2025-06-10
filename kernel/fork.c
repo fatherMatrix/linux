@@ -1303,6 +1303,9 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 		mm->def_flags = 0;
 	}
 
+	/*
+	 * 分配pgd，并拷贝内核地址空间对应的pgd entry
+	 */
 	if (mm_alloc_pgd(mm))
 		goto fail_nopgd;
 

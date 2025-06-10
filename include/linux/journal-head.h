@@ -62,6 +62,10 @@ struct journal_head {
 	 * Pointer to a saved copy of the buffer containing no uncommitted
 	 * deallocation references, so that allocations can avoid overwriting
 	 * uncommitted deletes. [b_state_lock]
+	 *
+	 * 含有未提交的删除信息的元数据块（磁盘块位图）的拷贝；
+	 * - 主要用来针对未提交的删除操作：一次删除动作后紧跟的分配动作使用的是
+	 *   b_committed_data中的数据，不会影响到写入日志中的数据
 	 */
 	char *b_committed_data;
 

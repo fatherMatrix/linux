@@ -461,6 +461,12 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 	 */
 	spin_lock(&pgd_lock);
 
+	/*
+	 * pgd中内核地址空间对应页表项的拷贝
+	 * - 仅拷贝了pgd这一级
+	 *   > 因为内核地址空间的页表除pgd这一级外都是共享的，之所以pgd没有共享，是因
+	 *     为pgd中还包含用户态的部分，用户态每个进程都是不一样的；
+	 */
 	pgd_ctor(mm, pgd);
 	if (sizeof(pmds) != 0)
 		pgd_prepopulate_pmd(mm, pgd, pmds);

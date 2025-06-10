@@ -658,6 +658,9 @@ static inline bool vma_start_read(struct vm_area_struct *vma)
 	 * ACQUIRE semantics, because this is just a lockless check whose result
 	 * we don't rely on for anything - the mm_lock_seq read against which we
 	 * need ordering is below.
+	 *
+	 * 它俩相等说明经过了 vma_start_write() ，此时应拒绝获取per-vma lock；
+	 * 当经过 vma_end_write_all() 后，两者便不再相等；
 	 */
 	if (READ_ONCE(vma->vm_lock_seq) == READ_ONCE(vma->vm_mm->mm_lock_seq))
 		return false;
@@ -711,6 +714,7 @@ static bool __is_vma_write_locked(struct vm_area_struct *vma, int *mm_lock_seq)
  *   是互斥掉 vma_start_read() 里的读
  *   > 释放在 mmap_write_unlock()
  *   > 感觉这个函数是可以多次重复调用的？
+ * - 没有vma_end_write()，相关功能在 mmap_write_unlock() 中
  */
 static inline void vma_start_write(struct vm_area_struct *vma)
 {
@@ -725,8 +729,14 @@ static inline void vma_start_write(struct vm_area_struct *vma)
 	 * from the early lockless pessimistic check in vma_start_read().
 	 * We don't really care about the correctness of that early check, but
 	 * we should use WRITE_ONCE() for cleanliness and to keep KCSAN happy.
+	 *
+	 * 这会阻止 vma_start_read() 成功获取per-vma锁
 	 */
 	WRITE_ONCE(vma->vm_lock_seq, mm_lock_seq);
+	/*
+	 * 这里放锁之后，是否会产生新的reader呢？
+	 * - 不会的，上面的WRITE_ONCE()避免了这种情况的发生
+	 */
 	up_write(&vma->vm_lock->lock);
 }
 

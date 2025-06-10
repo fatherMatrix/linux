@@ -310,7 +310,12 @@ static struct fs_context *alloc_fs_context(struct file_system_type *fs_type,
 		break;
 	}
 
-	/* TODO: Make all filesystems support this unconditionally */
+	/*
+	 * TODO: Make all filesystems support this unconditionally
+	 * - xfs: xfs_fs_type.xfs_init_fs_context
+	 * - cgroup: cgroup_fs_type.cgroup_init_fs_context
+	 * - cgroup1: cgroup_fs_type.cgroup_init_fs_context
+	 */
 	init_fs_context = fc->fs_type->init_fs_context;
 	if (!init_fs_context)
 		init_fs_context = legacy_init_fs_context;

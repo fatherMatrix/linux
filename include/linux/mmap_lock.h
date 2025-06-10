@@ -90,6 +90,8 @@ static inline void vma_end_write_all(struct mm_struct *mm)
 	 * We need RELEASE semantics here to ensure that preceding stores into
 	 * the VMA take effect before we unlock it with this store.
 	 * Pairs with ACQUIRE semantics in vma_start_read().
+	 *
+	 * - 这是使得 vma_start_read() 又可以工作了
 	 */
 	smp_store_release(&mm->mm_lock_seq, mm->mm_lock_seq + 1);
 }

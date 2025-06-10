@@ -65,10 +65,13 @@ struct rw_semaphore {
 	 * - 读者也会将其task_struct指针放入owner中，但因为读者不止一个，所以
 	 *   owner字段中保存的是最后一个获取rw_semaphore的读者；
 	 *   > 如果debug过程中发现只有一个读者，那么这个字段就会很有帮助
-	 * - 最后3bit用于：
+	 * - 在没有no reader spin优化前，最后3bit用于：
 	 *   > RWSEM_READER_OWNED
 	 *   > RWSEM_RD_NONSPINNABLE
 	 *   > RWSEM_WR_NONSPINNABLE
+	 * - 在no reader spin优化后，最后2bit用于：
+	 *   > RWSEM_READER_OWNED
+	 *   > RWSEM_NONSPINNABLE
 	 */
 	atomic_long_t owner;
 #ifdef CONFIG_RWSEM_SPIN_ON_OWNER

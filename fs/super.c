@@ -41,6 +41,7 @@
 
 static int thaw_super_locked(struct super_block *sb, enum freeze_holder who);
 
+static struct list_head super_blocks;	// For Source Insight
 static LIST_HEAD(super_blocks);
 static DEFINE_SPINLOCK(sb_lock);
 
@@ -1746,6 +1747,9 @@ int vfs_get_tree(struct fs_context *fc)
 
 	/* Get the mountable root in fc->root, with a ref on the root and a ref
 	 * on the superblock.
+	 * - xfs: xfs_context_ops.xfs_fs_get_tree()
+	 * - cgroup_fs_context_ops.cgroup_get_tree()
+	 * - cgroup1_fs_context_ops.cgroup1_get_tree()
 	 */
 	error = fc->ops->get_tree(fc);
 	if (error < 0)

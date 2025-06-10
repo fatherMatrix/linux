@@ -230,8 +230,15 @@ static inline void rwsem_set_nonspinnable(struct rw_semaphore *sem)
 	unsigned long owner = atomic_long_read(&sem->owner);
 
 	do {
+		/*
+		 * 如果当前不是读者持锁，则返回；因为设置nospin的意义就是有太多
+		 * 读者在临界区内，不要让写者继续等待？
+		 */
 		if (!(owner & RWSEM_READER_OWNED))
 			break;
+		/*
+		 * 如果当前已经设置了nospin，则再次设置是没有意义的
+		 */
 		if (owner & RWSEM_NONSPINNABLE)
 			break;
 	} while (!atomic_long_try_cmpxchg(&sem->owner, &owner,
@@ -240,6 +247,10 @@ static inline void rwsem_set_nonspinnable(struct rw_semaphore *sem)
 
 static inline bool rwsem_read_trylock(struct rw_semaphore *sem, long *cntp)
 {
+	/*
+	 * 不用检查是否有writer持锁吗？
+	 * - 先加上，加上后在所有reader计数清零之前，就不会有新的writer操作count了
+	 */
 	*cntp = atomic_long_add_return_acquire(RWSEM_READER_BIAS, &sem->count);
 
 	/*
@@ -252,6 +263,13 @@ static inline bool rwsem_read_trylock(struct rw_semaphore *sem, long *cntp)
 		rwsem_set_nonspinnable(sem);
 
 	if (!(*cntp & RWSEM_READ_FAILED_MASK)) {
+		/*
+		 * 这里为什么一定可以设置成功呢？
+		 * - 真正获取锁的动作在于对count的操作，这里上面已经增加过
+		 *   RWSEM_READER_BIAS了；而这里的RWSEM_READ_FAILED_MASK就
+		 *   包含了对writer的检测，只有没有writer时，才会进入这里。
+		 *   所以进入到这里的，都是已经持锁成功的reader
+		 */
 		rwsem_set_reader_owned(sem);
 		return true;
 	}
@@ -700,10 +718,16 @@ static inline bool rwsem_try_write_lock(struct rw_semaphore *sem,
 
 	/*
 	 * We have either acquired the lock with handoff bit cleared or set
+	 *                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^    ^^^
 	 * the handoff bit. Only the first waiter can have its handoff_set
+	 * ^^^^^^^^^^^^^^^
 	 * set here to enable optimistic spinning in slowpath loop.
 	 */
 	if (new & RWSEM_FLAG_HANDOFF) {
+	/*
+	 * 如果new被设置了handoff，说明我们走的是while循环中的第一个if路径
+	 * - 即未成功持锁
+	 */
 		first->handoff_set = true;
 		lockevent_inc(rwsem_wlock_handoff);
 		return false;
@@ -745,6 +769,9 @@ static inline bool rwsem_try_write_lock_unqueued(struct rw_semaphore *sem)
 	long count = atomic_long_read(&sem->count);
 
 	while (!(count & (RWSEM_LOCK_MASK|RWSEM_FLAG_HANDOFF))) {
+	/*
+	 * 没有被reader或者writer持有，且没有设置handoff
+	 */
 		if (atomic_long_try_cmpxchg_acquire(&sem->count, &count,
 					count | RWSEM_WRITER_LOCKED)) {
 			rwsem_set_owner(sem);
@@ -890,7 +917,13 @@ static bool rwsem_optimistic_spin(struct rw_semaphore *sem)
 	int loop = 0;
 	u64 rspin_threshold = 0;
 
-	/* sem->wait_lock should not be held when doing optimistic spinning */
+	/*
+	 * sem->wait_lock should not be held when doing optimistic spinning
+	 * - osq_lock()：
+	 *   > 返回true表示成功获取到锁；
+	 *   > 返回false表示未获取到锁，goto done后直接返回spin获取锁失败；
+	 * - 所以只有获取到osq_lock的一个进程才能自旋？
+	 */
 	if (!osq_lock(&sem->osq))
 		goto done;
 
@@ -904,14 +937,19 @@ static bool rwsem_optimistic_spin(struct rw_semaphore *sem)
 		enum owner_state owner_state;
 
 		/*
-		 * 如果owner已经不在cpu上了，则我们也没有自旋的意义了
+		 * 如果返回的是 OWNER_NONSPINNABLE ，则退出spin循环
 		 */
 		owner_state = rwsem_spin_on_owner(sem);
 		if (!(owner_state & OWNER_SPINNABLE))
 			break;
+		/*
+		 * 这里说明，writer会在reader临界区上spin，也会在writer临界区
+		 * 上spin
+		 */
 
 		/*
 		 * Try to acquire the lock
+		 * - 尝试获取一下rwsem
 		 */
 		taken = rwsem_try_write_lock_unqueued(sem);
 
@@ -1128,6 +1166,7 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int stat
 		 * 由于进入slowpath前，已经对count中的reader count部分加一了，所以
 		 * 这里只需要判断到没有writer持锁，没有handoff，就可以放心地持有
 		 * 读锁。
+		 * - 对count加了READER_BIAS之后，writer是不可能持锁的
 		 */
 		rwsem_set_reader_owned(sem);
 		lockevent_inc(rwsem_rlock_steal);
@@ -1155,7 +1194,7 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int stat
 	}
 
 	/*
-	 * 如果人家已经标记了 RWSEM_FLAG_HANDOFF ，则就不能偷锁了
+	 * 如果人家已经标记了 RWSEM_FLAG_HANDOFF ，则就不能偷锁了；
 	 */
 
 queue:
@@ -1251,7 +1290,10 @@ rwsem_down_write_slowpath(struct rw_semaphore *sem, int state)
 
 	/* do optimistic spinning and steal lock if possible */
 	if (rwsem_can_spin_on_owner(sem) && rwsem_optimistic_spin(sem)) {
-		/* rwsem_optimistic_spin() implies ACQUIRE on success */
+		/*
+		 * rwsem_optimistic_spin() implies ACQUIRE on success
+		 * - 进入到这里说明writer spin成功获取到了锁
+		 */
 		return sem;
 	}
 
@@ -1319,6 +1361,9 @@ rwsem_down_write_slowpath(struct rw_semaphore *sem, int state)
 		 * without sleeping.
 		 */
 		if (waiter.handoff_set) {
+		/*
+		 * 只有第一个waiter才会被设置为true
+		 */
 			enum owner_state owner_state;
 
 			owner_state = rwsem_spin_on_owner(sem);
