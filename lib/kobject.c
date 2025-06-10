@@ -359,6 +359,7 @@ error:
 }
 EXPORT_SYMBOL(kobject_init);
 
+int kobject_add_varg(); // For Source Insight
 static __printf(3, 0) int kobject_add_varg(struct kobject *kobj,
 					   struct kobject *parent,
 					   const char *fmt, va_list vargs)
@@ -407,6 +408,7 @@ static __printf(3, 0) int kobject_add_varg(struct kobject *kobj,
  *         when the use of the object is finished in order to properly free
  *         everything.
  */
+int kobject_add(); // For Source Insight
 int kobject_add(struct kobject *kobj, struct kobject *parent,
 		const char *fmt, ...)
 {

@@ -97,6 +97,9 @@ do {							\
  *		Either attrs or bin_attrs or both must be provided.
  */
 struct attribute_group {
+	/*
+	 * 可选的，如果指定了name，则attrs会被创建到name为名的目录中
+	 */
 	const char		*name;
 	umode_t			(*is_visible)(struct kobject *,
 					      struct attribute *, int);

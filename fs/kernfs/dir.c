@@ -17,6 +17,7 @@
 
 #include "kernfs-internal.h"
 
+static rwlock_t kernfs_rename_lock; // For Source Insight
 static DEFINE_RWLOCK(kernfs_rename_lock);	/* kn->parent and ->name */
 /*
  * Don't use rename_lock to piggy back on pr_cont_buf. We don't want to
@@ -25,8 +26,10 @@ static DEFINE_RWLOCK(kernfs_rename_lock);	/* kn->parent and ->name */
  * will introduce deadlock if the scheduler reads the kernfs_name in the
  * wakeup path.
  */
+static spinlock_t kernfs_pr_cont_lock; // For Source Insight
 static DEFINE_SPINLOCK(kernfs_pr_cont_lock);
 static char kernfs_pr_cont_buf[PATH_MAX];	/* protected by pr_cont_lock */
+static spinlock_t kernfs_idr_lock; // For Source Insight
 static DEFINE_SPINLOCK(kernfs_idr_lock);	/* root->ino_idr */
 
 #define rb_to_kn(X) rb_entry((X), struct kernfs_node, rb)
@@ -997,6 +1000,10 @@ struct kernfs_root *kernfs_create_root(struct kernfs_syscall_ops *scops,
 	kn->priv = priv;
 	kn->dir.root = root;
 
+	/*
+	 * cgroup_setup_root() / rdtgroup_setup_root() 中都设置了值；
+	 * sysfs_init() 中设置为了NULL；
+	 */
 	root->syscall_ops = scops;
 	root->flags = flags;
 	root->kn = kn;

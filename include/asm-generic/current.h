@@ -7,6 +7,7 @@
 
 #define get_current() (current_thread_info()->task)
 #define current get_current()
+struct task_struct *current; // For Source Insight
 #endif
 
 #endif /* __ASM_GENERIC_CURRENT_H */

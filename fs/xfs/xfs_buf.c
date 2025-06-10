@@ -1330,6 +1330,9 @@ __xfs_buf_ioend(
 		if (bp->b_log_item)
 			xfs_buf_item_done(bp);
 
+		/*
+		 * - xfs_buf_inode_iodone()
+		 */
 		if (bp->b_iodone)
 			bp->b_iodone(bp);
 	}

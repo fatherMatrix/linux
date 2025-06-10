@@ -406,6 +406,13 @@ retry:
 	raw_spin_unlock(&irq->irq_lock);
 	raw_spin_unlock_irqrestore(&vcpu->arch.vgic_cpu.ap_list_lock, flags);
 
+	/*
+	 * 蒙恩大佬说：arm就是没有支持模拟中断的PI，直接支持了物理中断的PI。说
+	 * arm发展起来的时候，已经过了模拟中断PI的时代，大家都用APU在后端直接
+	 * 承载virtio了，所以此时中断都是由APU产生的物理中断
+	 *
+	 * 春哥也给了说法：GICv2/GICv3确实没有这类PI
+	 */
 	kvm_make_request(KVM_REQ_IRQ_PENDING, vcpu);
 	kvm_vcpu_kick(vcpu);
 

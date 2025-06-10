@@ -693,6 +693,9 @@ static pageout_t pageout(struct folio *folio, struct address_space *mapping,
 			wbc.list = folio_list;
 
 		folio_set_reclaim(folio);
+		/*
+		 * swap_writepage
+		 */
 		res = mapping->a_ops->writepage(&folio->page, &wbc);
 		if (res < 0)
 			handle_write_error(mapping, folio, res);
@@ -5991,6 +5994,9 @@ again:
 
 	shrink_node_memcgs(pgdat, sc);
 
+	/*
+	 * 将本进程释放过的page数量计入到scan_control中
+	 */
 	flush_reclaim_state(sc);
 
 	nr_node_reclaimed = sc->nr_reclaimed - nr_reclaimed;

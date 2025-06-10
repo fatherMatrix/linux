@@ -351,6 +351,11 @@ static struct attribute *ext4_feat_attrs[] = {
 	NULL,
 };
 ATTRIBUTE_GROUPS(ext4_feat);
+/*
+ * ATTRIBUTE_GROUPS()展开后：
+ */
+static const struct attribute_group *ext4_feat_groups[];
+
 
 static void *calc_ptr(struct ext4_attr *a, struct ext4_sb_info *sbi)
 {

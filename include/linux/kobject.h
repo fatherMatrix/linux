@@ -66,6 +66,10 @@ struct kobject {
 	struct list_head	entry;
 	struct kobject		*parent;
 	struct kset		*kset;
+	/*
+	 * /sys/fs/ext4/features/* 这类文件：
+	 * - ext4_feat_ktype
+	 */
 	const struct kobj_type	*ktype;
 	struct kernfs_node	*sd; /* sysfs directory entry */
 	struct kref		kref;
@@ -113,9 +117,18 @@ const void *kobject_namespace(const struct kobject *kobj);
 void kobject_get_ownership(const struct kobject *kobj, kuid_t *uid, kgid_t *gid);
 char *kobject_get_path(const struct kobject *kobj, gfp_t flag);
 
+/*
+ * 表示一个kobject的目录下对应的一系列文件
+ */
 struct kobj_type {
 	void (*release)(struct kobject *kobj);
+	/*
+	 * default_groups的read/write方法
+	 */
 	const struct sysfs_ops *sysfs_ops;
+	/*
+	 * 就是这堆文件
+	 */
 	const struct attribute_group **default_groups;
 	const struct kobj_ns_type_operations *(*child_ns_type)(const struct kobject *kobj);
 	const void *(*namespace)(const struct kobject *kobj);
