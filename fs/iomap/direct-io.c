@@ -589,6 +589,9 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		if (user_backed_iter(iter))
 			dio->flags |= IOMAP_DIO_DIRTY;
 
+		/*
+		 * dio的读，会先把pagecache中脏的刷下去
+		 */
 		ret = kiocb_write_and_wait(iocb, iomi.len);
 		if (ret)
 			goto out_free_dio;

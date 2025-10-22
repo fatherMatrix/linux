@@ -1689,10 +1689,18 @@ static int _cpu_up(unsigned int cpu, int tasks_frozen, enum cpuhp_state target)
 
 	cpuhp_tasks_frozen = tasks_frozen;
 
+	/*
+	 * 从后面的代码可以看出，cpu up的过程分为多个阶段：
+	 * - control cpu运行的代码
+	 * - hotplug thread运行的代码
+	 * - hotplug cpu运行的代码
+	 */
 	cpuhp_set_state(cpu, st, target);
 	/*
 	 * If the current CPU state is in the range of the AP hotplug thread,
 	 * then we need to kick the thread once more.
+	 * - 进入的前提是当前状态已经大于CPUHP_BRINGUP_CPU了，即已经有可以调度
+	 *   的hotplug thread了
 	 */
 	if (st->state > CPUHP_BRINGUP_CPU) {
 		ret = cpuhp_kick_ap_work(cpu);

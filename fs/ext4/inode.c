@@ -1905,7 +1905,9 @@ static bool mpage_add_bh_to_extent(struct mpage_da_data *mpd, ext4_lblk_t lblk,
 	    (!buffer_delay(bh) && !buffer_unwritten(bh))) {
 		/* So far no extent to map => we write the buffer right away */
 		if (map->m_len == 0)
+			/* 返回true后可以继续处理下一个bh */
 			return true;
+		/* 到这里说明这个bh不可能添加进map了，因为肯定不连续了 */
 		return false;
 	}
 
@@ -2620,6 +2622,7 @@ retry:
 	 * starting a transaction unnecessarily and also avoid being blocked
 	 * in the block layer on device congestion while having transaction
 	 * started.
+	 * - 这次调用没有开启新的事务，所以不能更改元数据，因此不能do_map
 	 */
 	mpd->do_map = 0;
 	mpd->scanned_until_end = 0;

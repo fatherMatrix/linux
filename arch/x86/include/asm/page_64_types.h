@@ -78,6 +78,10 @@
 					IA32_PAGE_OFFSET : TASK_SIZE_MAX)
 
 #define STACK_TOP		TASK_SIZE_LOW
+/*
+ * 用户态栈sp的最高位置
+ * - 其实就是用户态的最大地址
+ */
 #define STACK_TOP_MAX		TASK_SIZE_MAX
 
 /*

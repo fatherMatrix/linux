@@ -3969,6 +3969,9 @@ again:
 			break;
 		}
 
+		/*
+		 * ext4 delayed: ext4_da_write_begin()
+		 */
 		status = a_ops->write_begin(file, mapping, pos, bytes,
 						&page, &fsdata);
 		if (unlikely(status < 0))

@@ -956,7 +956,10 @@ out_free_interp:
 		    elf_check_fdpic(interp_elf_ex))
 			goto out_free_dentry;
 
-		/* Load the interpreter program headers */
+		/*
+		 * Load the interpreter program headers
+		 * - 这是一个elf_phdr结构体数组
+		 */
 		interp_elf_phdata = load_elf_phdrs(interp_elf_ex,
 						   interpreter);
 		if (!interp_elf_phdata)
@@ -1117,6 +1120,11 @@ out_free_interp:
 			 * without MAP_FIXED nor MAP_FIXED_NOREPLACE).
 			 */
 			if (interpreter) {
+			/*
+			 * ET_DYN且有interpreter，来源：
+			 * - gcc -pie -fPIE
+			 *   > 这种首先可以执行，然后还具有interpreter
+			 */
 				load_bias = ELF_ET_DYN_BASE;
 				if (current->flags & PF_RANDOMIZE)
 					load_bias += arch_mmap_rnd();
@@ -1125,6 +1133,11 @@ out_free_interp:
 					load_bias &= ~(alignment - 1);
 				elf_flags |= MAP_FIXED_NOREPLACE;
 			} else
+			/*
+			 * 这种：
+			 * - readelf -l /lib64/ld-linux-x86-64.so.2
+			 *   > 只有这个so是没有interpreter的，libc.so都是有的
+			 */
 				load_bias = 0;
 
 			/*

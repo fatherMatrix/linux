@@ -3251,6 +3251,10 @@ xfs_bmap_btalloc_select_lengths(
 	 */
 	*blen = 0;
 	for_each_perag_wrap(mp, startag, agno, pag) {
+		/*
+		 * 如果试图分配的blen大于最长的extent，则调整blen至当前最长的
+		 * extent length
+		 */
 		error = xfs_bmap_longest_free_extent(pag, args->tp, blen);
 		if (error && error != -EAGAIN)
 			break;
@@ -3352,6 +3356,14 @@ xfs_bmap_compute_alignments(
 		args->prod = 1;
 		args->mod = 0;
 	} else {
+		/*
+		 * 一个page中包含多个fsblock
+		 * - xfs_alloc_args->prod的含义是理想的对齐值，单位是fsblock
+		 *   > 此处是一个page中包含的fsblock个数
+		 * - xfs_alloc_args->mod的含义是offset后有多少是未对齐的
+		 *   > mod = offset % prod是offset到其前面对齐边界的距离，
+		 *     prod - mod之后是offset到其后面对齐边界的距离
+		 */
 		args->prod = PAGE_SIZE >> mp->m_sb.sb_blocklog;
 		div_u64_rem(ap->offset, args->prod, &args->mod);
 		if (args->mod)
@@ -3660,6 +3672,9 @@ xfs_bmap_btalloc_best_length(
 	 * 第一次对xfs_bmalloca->blkno做设置，位置为贴近其xfs_inode
 	 */
 	ap->blkno = XFS_INO_TO_FSB(args->mp, ap->ip->i_ino);
+	/*
+	 * 优化ap->blkno，使其贴近文件地址空间中前一个extent对应的物理块
+	 */
 	xfs_bmap_adjacent(ap);
 
 	/*

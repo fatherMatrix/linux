@@ -78,6 +78,7 @@ void __init idle_threads_init(void)
 
 #endif /* #ifdef CONFIG_SMP */
 
+static struct list_head hotplug_threads; // For Source Insight
 static LIST_HEAD(hotplug_threads);
 static DEFINE_MUTEX(smpboot_threads_lock);
 
@@ -161,6 +162,9 @@ static int smpboot_thread_fn(void *data)
 		} else {
 			__set_current_state(TASK_RUNNING);
 			preempt_enable();
+			/*
+			 * cpuhp_threads: cpuhp_thread_fun()
+			 */
 			ht->thread_fn(td->cpu);
 		}
 	}

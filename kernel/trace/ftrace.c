@@ -3283,6 +3283,9 @@ static int ftrace_allocate_records(struct ftrace_page *pg, int count)
 	order = fls(pages) - 1;
 
  again:
+	/*
+	 * 这里分配的不一定是一个单页
+	 */
 	pg->records = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, order);
 
 	if (!pg->records) {

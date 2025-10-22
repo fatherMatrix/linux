@@ -3320,6 +3320,9 @@ xfs_alloc_vextent_check_args(
 	args->fsbno = NULLFSBLOCK;
 
 	*minimum_agno = 0;
+	/*
+	 * 同一个事务中，仅允许按AG顺序加
+	 */
 	if (args->tp->t_highest_agno != NULLAGNUMBER)
 		*minimum_agno = args->tp->t_highest_agno;
 
@@ -3559,6 +3562,9 @@ xfs_alloc_vextent_iterate_ags(
 	xfs_agnumber_t		agno;
 	int			error = 0;
 
+	/*
+	 * try alloc
+	 */
 	if (alloc_flags & XFS_ALLOC_FLAG_TRYLOCK)
 		restart_agno = 0;
 restart:

@@ -4526,6 +4526,12 @@ static long ext4_zero_range(struct file *file, loff_t offset,
 	 */
 	start = round_up(offset, 1 << blkbits);
 	end = round_down((offset + len), 1 << blkbits);
+	/*
+	 * --zz|zzzz|zzzz|zzz-
+	 *      ^         ^
+	 *      |         |
+	 *    start      end
+	 */
 
 	if (start < offset || end > offset + len)
 		return -EINVAL;
@@ -4535,6 +4541,7 @@ static long ext4_zero_range(struct file *file, loff_t offset,
 	lblk = start >> blkbits;
 	max_blocks = (end >> blkbits);
 	if (max_blocks < lblk)
+		/* start end在一个block中时 */
 		max_blocks = 0;
 	else
 		max_blocks -= lblk;

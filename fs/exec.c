@@ -284,6 +284,10 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
 
 	mm->stack_vm = mm->total_vm = 1;
 	mmap_write_unlock(mm);
+	/*
+	 * 指向最开始的栈顶，此时还没有分配物理内存
+	 * - copy_strings() 中会进行物理内存的分配
+	 */
 	bprm->p = vma->vm_end - sizeof(void *);
 	return 0;
 err:
@@ -439,6 +443,9 @@ static int count(struct user_arg_ptr argv, int max)
 		for (;;) {
 			const char __user *p = get_user_arg_ptr(argv, i);
 
+			/*
+			 * 参数指针数组的最后一个指针是NULL
+			 */
 			if (!p)
 				break;
 
@@ -831,6 +838,15 @@ int setup_arg_pages(struct linux_binprm *bprm,
 		pr_warn_once("process '%pD4' started with executable stack\n",
 			     bprm->file);
 	}
+
+	/*
+	 * 这里会进行一次用户态stack的搬移，从最开始的STACK_TOP_MAX附近，搬移
+	 * 到STACK_TOP附近。
+	 * - 这里的搬移指的是页表的重新映射
+	 * - 这个搬移解决了两个问题：
+	 *   > 栈地址随机化
+	 *   > 56位地址空间中，STACK_TOP距STACK_TOP_MAX极远
+	 */
 
 	/* Move stack pages down in memory. */
 	if (stack_shift) {
@@ -1260,6 +1276,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 
 	/*
 	 * Make this the only thread in the thread group.
+	 * - 多线程进程调用execve()后，其他的线程会被kill掉
 	 */
 	retval = de_thread(me);
 	if (retval)
@@ -1736,6 +1753,9 @@ static int search_binary_handler(struct linux_binprm *bprm)
 			continue;
 		read_unlock(&binfmt_lock);
 
+		/*
+		 * elf: load_elf_binary()
+		 */
 		retval = fmt->load_binary(bprm);
 
 		read_lock(&binfmt_lock);
