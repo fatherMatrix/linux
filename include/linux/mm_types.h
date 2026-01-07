@@ -877,6 +877,34 @@ struct mm_struct {
 		 */
 		atomic_t tlb_flush_pending;
 #ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
+		/*
+		 * 批量 TLB 刷新状态追踪（页面回收专用）
+		 *
+		 * 页面回收（reclaim）在批量 TLB 刷新模式下会延迟 TLB 失效操作，
+		 * 这可能与并行的 mprotect()/munmap() 等系统调用产生竞争，导致
+		 * 访问到陈旧的 TLB 表项。本字段记录批量刷新的历史状态，用于
+		 * 在风险操作时按需刷新 TLB。
+		 *
+		 * 位字段编码：
+		 *   Bits 0-14  (pending):  待处理的批量刷新代数
+		 *   Bits 16-30 (flushed):  已完成的批量刷新代数
+		 *
+		 * 如果 pending != flushed，表示存在未刷新的批量 TLB 操作。
+		 *
+		 * 设计要点：
+		 * 1. 使用代数（generation）而非布尔值，准确区分多个批量操作
+		 * 2. 记录历史状态而非实时追踪，避免在回收期间的高开销
+		 * 3. 在 mprotect/munmap 等风险操作时，通过 PTL 同步并按需刷新
+		 * 4. 每次回收周期中，第一个风险操作需要额外刷新一次 TLB
+		 *
+		 * 关键函数：
+		 * - set_tlb_ubc_flush_pending():     设置批量刷新待处理状态
+		 * - flush_tlb_batched_pending():     刷新待处理的批量 TLB
+		 *
+		 * 架构支持：x86、ARM64（需要 CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH）
+		 *
+		 * 详细分析见：Documentation/tlb_flush_batched_analysis.md
+		 */
 		/* See flush_tlb_batched_pending() */
 		atomic_t tlb_flush_batched;
 #endif

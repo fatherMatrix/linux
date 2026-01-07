@@ -339,6 +339,30 @@ struct mmu_gather {
 
 	unsigned int		batch_count;
 
+	/*
+	 * CONFIG_MMU_GATHER_NO_GATHER 配置选项的作用：
+	 *
+	 * 当启用 CONFIG_MMU_GATHER_NO_GATHER 时，mmu_gather 机制将不再批量收集页面以延迟释放。
+	 *
+	 * 正常的批处理模式（未定义 CONFIG_MMU_GATHER_NO_GATHER）：
+	 * - mmu_gather 会维护一个页面批处理队列，收集待释放的页面
+	 * - 通过 active、local 和 __pages[] 等字段管理页面缓冲区
+	 * - TLB 刷新后才批量释放收集的页面，保证正确的操作顺序
+	 * - 提高性能：减少多次独立的页面释放操作
+	 *
+	 * 禁用批处理模式（定义了 CONFIG_MMU_GATHER_NO_GATHER）：
+	 * - 不再维护页面批处理相关的数据结构（active、local、__pages[]）
+	 * - 平台必须提供自己的 __tlb_remove_page_size() 实现来立即释放页面
+	 * - 适用于在 ptep_get_and_clear() 等函数中已经执行了 TLB 刷新的架构
+	 * - 例如 S390 架构：由于其硬件特性要求在修改页表项时立即使 TLB 无效，
+	 *   因此不需要延迟页面释放，可以在 __tlb_remove_page_size() 中直接调用
+	 *   free_page_and_swap_cache() 立即释放页面
+	 *
+	 * 使用场景：
+	 * - 启用此选项的架构需要满足：架构已经在清除页表项的各个函数中处理了 TLB 刷新
+	 * - 依赖于 MMU_GATHER_TABLE_FREE（必须启用页表释放支持）
+	 * - 目前主要在 S390 架构上使用
+	 */
 #ifndef CONFIG_MMU_GATHER_NO_GATHER
 	struct mmu_gather_batch *active;
 	struct mmu_gather_batch	local;

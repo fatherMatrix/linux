@@ -289,23 +289,71 @@ static int __meminit vmemmap_populate_range(unsigned long start,
 	return 0;
 }
 
+/*
+ * 使用基础页（4KB）填充 vmemmap 虚拟地址空间
+ *
+ * 这是最基本的 vmemmap 映射方式，为 [start, end) 范围内的每个页面
+ * 都建立独立的 PTE 映射。
+ *
+ * 与 vmemmap_populate_hugepages() 的区别：
+ * - vmemmap_populate_basepages: 使用 4KB 基础页映射（慢，TLB 压力大）
+ * - vmemmap_populate_hugepages: 使用 2MB PMD 大页映射（快，TLB 压力小）
+ *
+ * 使用场景：
+ * - 小范围 vmemmap 填充（< PAGES_PER_SECTION * sizeof(struct page)）
+ * - CPU 不支持大页（!X86_FEATURE_PSE）
+ * - 作为大页映射失败的回退方案
+ */
 int __meminit vmemmap_populate_basepages(unsigned long start, unsigned long end,
 					 int node, struct vmem_altmap *altmap)
 {
 	return vmemmap_populate_range(start, end, node, altmap, NULL);
 }
 
+/*
+ * 架构相关的 PMD 大页设置钩子
+ *
+ * 某些架构可能需要特殊的 PMD 设置逻辑，通过此钩子实现。
+ * 默认为空函数，架构可以通过覆盖此函数来自定义行为。
+ */
 void __weak __meminit vmemmap_set_pmd(pmd_t *pmd, void *p, int node,
 				      unsigned long addr, unsigned long next)
 {
 }
 
+/*
+ * 架构相关的 PMD 检查钩子
+ *
+ * 某些架构可能需要检查 PMD 是否满足特定条件才能使用大页映射。
+ * 默认返回 0（不跳过），架构可以通过覆盖此函数来实现自定义检查。
+ *
+ * Return: 0 表示继续处理，非 0 表示跳过此 PMD
+ */
 int __weak __meminit vmemmap_check_pmd(pmd_t *pmd, int node,
 				       unsigned long addr, unsigned long next)
 {
 	return 0;
 }
 
+/*
+ * 使用大页（PMD 级别 2MB）填充 vmemmap 虚拟地址空间
+ *
+ * 这是 vmemmap 的优化映射方式，尽可能使用 2MB PMD 大页来映射
+ * vmemmap 区域，减少页表层级和 TLB miss。
+ *
+ * 工作流程：
+ * 1. 遍历 [start, end) 范围，以 PMD 粒度（2MB）处理
+ * 2. 逐级填充页表：PGD → P4D → PUD → PMD
+ * 3. 如果 PMD 为空，尝试分配 2MB 物理内存并建立 PMD 大页映射
+ * 4. 如果 PMD 大页映射失败，回退到基础页映射
+ *
+ * 优点：
+ * - 减少页表层级（PGD → P4D → PUD → PMD，省略 PTE）
+ * - 减少 TLB 表项数量（512 个 4KB 页用 1 个 TLB 表项）
+ * - 提高 vmemmap 访问性能（pfn_to_page/page_to_pfn）
+ *
+ * 详细分析见：Documentation/sparse_vmemmap_and_hugetlb_vmemmap_optimization.md
+ */
 int __meminit vmemmap_populate_hugepages(unsigned long start, unsigned long end,
 					 int node, struct vmem_altmap *altmap)
 {

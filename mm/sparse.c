@@ -709,6 +709,23 @@ static struct page * __meminit populate_section_memmap(unsigned long pfn,
 	return __populate_section_memmap(pfn, nr_pages, nid, altmap, pgmap);
 }
 
+/*
+ * 释放运行时动态分配的 memmap（热插拔内存）
+ *
+ * 用于释放通过 populate_section_memmap() 分配的 memmap，这些 memmap
+ * 是在热插拔内存时动态分配的（非 early section）。
+ *
+ * 特点：
+ * 1. 支持部分段释放（subsection）：通过 nr_pages 参数
+ * 2. 支持设备内存的特殊分配器：通过 altmap 参数
+ * 3. 不需要检查自引用：memmap 独立分配，不会存储在被管理的物理内存中
+ *
+ * 与 free_map_bootmem() 的区别：
+ * - depopulate_section_memmap: 热插拔内存移除，支持 subsection 和 altmap
+ * - free_map_bootmem: 早期内存段移除，固定整个 section，不支持 altmap
+ *
+ * 详细分析见：Documentation/depopulate_vs_free_map_bootmem_analysis.md
+ */
 static void depopulate_section_memmap(unsigned long pfn, unsigned long nr_pages,
 		struct vmem_altmap *altmap)
 {
@@ -717,6 +734,27 @@ static void depopulate_section_memmap(unsigned long pfn, unsigned long nr_pages,
 
 	vmemmap_free(start, end, altmap);
 }
+
+/*
+ * 释放启动时分配的 memmap（早期内存段）
+ *
+ * 用于释放在内核启动时通过 __populate_section_memmap() 分配的 memmap，
+ * 这些 memmap 对应的 section 带有 SECTION_IS_EARLY 标志。
+ *
+ * 特点：
+ * 1. 固定释放整个 section：不支持部分释放
+ * 2. 不支持 altmap：始终为 NULL
+ * 3. 调用相同的 vmemmap_free()：与 depopulate_section_memmap 实现类似
+ *
+ * 与 depopulate_section_memmap() 的区别：
+ * - depopulate_section_memmap: 热插拔内存移除，支持 subsection 和 altmap
+ * - free_map_bootmem: 早期内存段移除，固定整个 section，不支持 altmap
+ *
+ * 注意：在 CONFIG_SPARSEMEM_VMEMMAP=n 配置下，此函数有更复杂的实现，
+ * 需要检查 memmap 自身是否存储在被移除的 section 中（自引用问题）。
+ *
+ * 详细分析见：Documentation/depopulate_vs_free_map_bootmem_analysis.md
+ */
 static void free_map_bootmem(struct page *memmap)
 {
 	unsigned long start = (unsigned long)memmap;
@@ -774,6 +812,12 @@ static int fill_subsection_map(unsigned long pfn, unsigned long nr_pages)
 	return rc;
 }
 #else
+/*
+ * 非 VMEMMAP 配置：分配 memmap（热插拔内存）
+ *
+ * 通过 kvmalloc_node() 直接分配 memmap 数组的内存。
+ * 这种方式不使用虚拟地址空间的 vmemmap 区域，而是普通的虚拟内存分配。
+ */
 static struct page * __meminit populate_section_memmap(unsigned long pfn,
 		unsigned long nr_pages, int nid, struct vmem_altmap *altmap,
 		struct dev_pagemap *pgmap)
@@ -782,12 +826,43 @@ static struct page * __meminit populate_section_memmap(unsigned long pfn,
 					PAGES_PER_SECTION), GFP_KERNEL, nid);
 }
 
+/*
+ * 非 VMEMMAP 配置：释放运行时动态分配的 memmap（热插拔内存）
+ *
+ * 与 VMEMMAP 配置不同，这里的 memmap 是通过 kvmalloc_node() 分配的普通内存，
+ * 因此直接使用 kvfree() 释放即可。
+ *
+ * 特点：
+ * 1. 简单的释放操作：无需处理页表映射
+ * 2. 不需要检查自引用：memmap 通过 kvmalloc 分配，不会存储在被管理的物理内存中
+ */
 static void depopulate_section_memmap(unsigned long pfn, unsigned long nr_pages,
 		struct vmem_altmap *altmap)
 {
 	kvfree(pfn_to_page(pfn));
 }
 
+/*
+ * 非 VMEMMAP 配置：释放启动时分配的 memmap（早期内存段）
+ *
+ * 这是最复杂的释放场景，需要逐页检查并处理"自引用"问题：
+ * - 如果 memmap 存储在被移除的 section 自身中，不能释放（避免页分配器重新分配）
+ * - 如果 memmap 存储在其他 section 中，安全释放
+ *
+ * 自引用问题示例：
+ *   Section A 的 memmap 数组恰好存储在 Section A 自己的物理内存中
+ *   当移除 Section A 时：
+ *     - Section A 进入 offline 状态
+ *     - 如果释放了 Section A 自己的 memmap，这部分内存会被页分配器重新分配
+ *     - 但 Section A 即将被物理移除，导致正在使用的内存突然消失！
+ *
+ * 解决方案：
+ *   检查 maps_section_nr（memmap 所在的 section）和 removing_section_nr（正在移除的 section）
+ *   如果两者相同：不释放（避免自引用问题）
+ *   如果两者不同：安全释放
+ *
+ * 详细分析见：Documentation/depopulate_vs_free_map_bootmem_analysis.md
+ */
 static void free_map_bootmem(struct page *memmap)
 {
 	unsigned long maps_section_nr, removing_section_nr, i;
@@ -802,6 +877,10 @@ static void free_map_bootmem(struct page *memmap)
 
 		BUG_ON(magic == NODE_INFO);
 
+		/*
+		 * maps_section_nr: memmap 自身所在的 section 号
+		 * removing_section_nr: 正在被移除的 section 号
+		 */
 		maps_section_nr = pfn_to_section_nr(page_to_pfn(page));
 		removing_section_nr = page_private(page);
 
@@ -812,6 +891,11 @@ static void free_map_bootmem(struct page *memmap)
 		 * on the same section, it must not be freed.
 		 * If it is freed, page allocator may allocate it which will
 		 * be removed physically soon.
+		 */
+		/*
+		 * 检查自引用：
+		 * 如果 memmap 和被移除的 section 是同一个，不释放（避免自引用问题）
+		 * 否则安全释放
 		 */
 		if (maps_section_nr != removing_section_nr)
 			put_page_bootmem(page);

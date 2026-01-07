@@ -14,6 +14,111 @@
  * Buffermem limits added 12.3.98, Rik van Riel.
  */
 
+/*
+ * ============================================================================
+ * LRU (Least Recently Used) 批处理机制概述
+ * ============================================================================
+ *
+ * 本文件实现了 Linux 内核的 LRU 页面管理批处理机制，这是内存管理子系统
+ * 的核心性能优化技术之一。
+ *
+ * === 核心设计理念 ===
+ *
+ * 问题：
+ * - 页面的 LRU 操作（添加、移除、激活、去活化等）非常频繁
+ * - 每次操作都需要获取全局 LRU 锁，导致严重的锁竞争
+ * - 在多核系统中，频繁的锁操作严重影响性能和可扩展性
+ *
+ * 解决方案：Per-CPU 批处理队列
+ * - 使用 Per-CPU 的 folio_batch 作为页面操作的缓冲区
+ * - 页面操作先记录在本地 CPU 的批处理队列中（无锁或仅本地锁）
+ * - 当队列满或需要时，批量刷新到全局 LRU 链表（一次性获取锁）
+ * - 大幅减少全局锁的竞争和获取次数
+ *
+ * === 主要组件 ===
+ *
+ * 1. Per-CPU 批处理结构（cpu_fbatches）：
+ *    - lru_add: 等待加入 LRU 的新页面
+ *    - lru_deactivate_file: 文件页去活化（降低优先级）
+ *    - lru_deactivate: 一般页面去活化
+ *    - lru_lazyfree: 延迟释放的匿名页
+ *    - activate: 页面激活（提升优先级）
+ *    - lru_rotate: 页面轮转（移至链表尾部）
+ *
+ * 2. 排空接口：
+ *    - lru_add_drain(): 排空当前 CPU 的批处理队列
+ *    - lru_add_drain_all(): 排空所有 CPU 的批处理队列
+ *    - lru_add_drain_cpu(): 排空指定 CPU 的批处理队列
+ *
+ * 3. 页面操作接口：
+ *    - folio_add_lru(): 将页面添加到 LRU（通过批处理）
+ *    - folio_activate(): 激活页面
+ *    - folio_deactivate(): 去活化页面
+ *    - folio_mark_lazyfree(): 标记为延迟释放
+ *
+ * === 关键流程 ===
+ *
+ * 添加页面到 LRU：
+ * 1. folio_add_lru() 将页面加入 Per-CPU 的 lru_add 队列
+ * 2. 增加页面引用计数（防止被提前释放）
+ * 3. 如果队列满，触发 folio_batch_move_lru() 批量刷新
+ * 4. 刷新时获取 LRU 锁，批量将所有页面移入全局 LRU 链表
+ *
+ * 排空批处理队列：
+ * 1. 禁用抢占（防止 CPU 迁移）
+ * 2. 依次处理各类批处理队列（lru_add、rotate、deactivate 等）
+ * 3. 对每个非空队列调用相应的移动函数
+ * 4. 释放页面引用计数
+ *
+ * === 性能优化技术 ===
+ *
+ * 1. 批量处理：
+ *    - 一次锁获取可处理多个页面（最多 15 个/批次）
+ *    - 减少锁开销和缓存行抖动
+ *
+ * 2. Per-CPU 设计：
+ *    - 避免 CPU 间的缓存行竞争
+ *    - 本地操作无需全局同步
+ *
+ * 3. 延迟处理：
+ *    - 非紧急操作可以延迟到队列满或显式刷新
+ *    - 减少不必要的立即操作
+ *
+ * 4. 代数优化（Generation）：
+ *    - lru_add_drain_all() 使用代数计数器避免重复工作
+ *    - 高竞争场景下多个并发调用可以合并
+ *
+ * === 同步和一致性 ===
+ *
+ * 何时需要排空？
+ * 1. 页面迁移/隔离前：确保页面不在批处理队列中
+ * 2. mlock/munlock 操作：确保锁定状态立即生效
+ * 3. 内存统计：获取准确的 LRU 状态
+ * 4. 页面释放路径：及时归还页面给分配器
+ * 5. 内存回收：准确识别可回收页面
+ *
+ * 内存屏障：
+ * - smp_mb(): 保证跨 CPU 的可见性顺序
+ * - smp_load_acquire/smp_store_release: 保证加载/存储顺序
+ * - 关键路径使用内存屏障防止指令重排和保证可见性
+ *
+ * === 使用注意事项 ===
+ *
+ * 1. lru_add_drain() vs lru_add_drain_all()：
+ *    - drain(): 本地 CPU，快速，用于局部一致性
+ *    - drain_all(): 全局，慢速，用于全局一致性
+ *
+ * 2. 性能权衡：
+ *    - 过早排空会降低批处理效果
+ *    - 过晚排空可能导致内存视图不一致
+ *    - 应在必要时才调用排空操作
+ *
+ * 3. 并发安全：
+ *    - local_lock 保护 Per-CPU 数据
+ *    - 排空时需要获取全局 LRU 锁
+ *    - 调用者需要注意锁的嵌套顺序
+ */
+
 #include <linux/mm.h>
 #include <linux/sched.h>
 #include <linux/kernel_stat.h>
@@ -57,16 +162,37 @@ static DEFINE_PER_CPU(struct lru_rotate, lru_rotate) = {
 };
 
 /*
+ * Per-CPU 页面批处理结构（folio batch）：
+ *
+ * 以下 folio batch 被分组在一起，因为它们受到禁用抢占的保护（中断保持启用状态）。
+ * 这是 LRU 批处理机制的核心数据结构，用于延迟和批量处理页面的 LRU 操作。
+ *
+ * LRU 批处理机制的设计理念：
+ * 1. 性能优化：避免频繁获取 LRU 锁，将多个页面的操作批量处理
+ * 2. 减少锁竞争：通过 Per-CPU 缓存减少对全局 LRU 链表的并发访问
+ * 3. 延迟处理：页面先放入 Per-CPU 批处理队列，等积累到一定数量或需要时再统一处理
+ */
+/*
  * The following folio batches are grouped together because they are protected
  * by disabling preemption (and interrupts remain enabled).
  */
 struct cpu_fbatches {
+	/* 本地锁，保护以下批处理队列 */
 	local_lock_t lock;
+
+	/* 等待加入 LRU 的页面队列 */
 	struct folio_batch lru_add;
+
+	/* 等待去活化的文件页队列 */
 	struct folio_batch lru_deactivate_file;
+
+	/* 等待去活化的页面队列 */
 	struct folio_batch lru_deactivate;
+
+	/* 等待延迟释放的页面队列 */
 	struct folio_batch lru_lazyfree;
 #ifdef CONFIG_SMP
+	/* 等待激活的页面队列（仅 SMP） */
 	struct folio_batch activate;
 #endif
 };
@@ -639,6 +765,30 @@ static void lru_lazyfree_fn(struct lruvec *lruvec, struct folio *folio)
 }
 
 /*
+ * lru_add_drain_cpu - 排空指定 CPU 的 LRU 批处理队列
+ * @cpu: 要排空的 CPU 编号
+ *
+ * 将指定 CPU 上所有 Per-CPU LRU 批处理队列中的页面刷新到全局 LRU 链表中。
+ * 这是 LRU 批处理机制的核心排空函数。
+ *
+ * 调用上下文：
+ * - "cpu" 必须是当前 CPU（抢占已被禁用）
+ * - 或者 "cpu" 正在被热拔出，此时它已经处于死亡状态
+ *
+ * 处理的批处理队列（按顺序）：
+ * 1. lru_add: 将新页面添加到 LRU 链表
+ * 2. lru_rotate: 将页面移动到 inactive 链表尾部（用于回收提示）
+ * 3. lru_deactivate_file: 去活化文件页（加速回收）
+ * 4. lru_deactivate: 去活化页面
+ * 5. lru_lazyfree: 标记匿名页为延迟释放
+ * 6. activate: 激活页面（仅 SMP 系统）
+ *
+ * 设计要点：
+ * - 批处理机制用于提高性能：减少对 LRU 锁的争用
+ * - 延迟处理：页面操作先缓存在 Per-CPU 队列中，批量刷新时才真正操作 LRU 链表
+ * - 内存一致性：在某些关键路径上（如页面迁移、mlock等）必须先排空这些队列
+ */
+/*
  * Drain pages out of the cpu's folio_batch.
  * Either "cpu" is the current CPU, and preemption has already been
  * disabled; or "cpu" is being hot-unplugged, and is already dead.
@@ -746,6 +896,36 @@ void folio_mark_lazyfree(struct folio *folio)
 	}
 }
 
+/*
+ * lru_add_drain - 排空当前 CPU 的 LRU 批处理队列
+ *
+ * 这是用户最常调用的接口函数，用于将当前 CPU 的所有 Per-CPU LRU 批处理队列
+ * 中缓存的页面刷新到全局 LRU 链表中。
+ *
+ * 功能：
+ * 1. 获取本地锁（禁用抢占）
+ * 2. 调用 lru_add_drain_cpu() 排空所有 LRU 批处理队列
+ * 3. 排空 mlock 相关的本地队列
+ * 4. 释放本地锁
+ *
+ * 典型使用场景：
+ * 1. 页面迁移前：确保待迁移页面不在 Per-CPU 队列中
+ * 2. 页面隔离前：保证能看到页面的最新 LRU 状态
+ * 3. mlock/munlock：确保页面的锁定状态及时生效
+ * 4. 内存回收路径：获取准确的 LRU 链表状态
+ * 5. 页面释放路径：将缓存页面尽快归还给页面分配器
+ * 6. GUP (get_user_pages) 后：确保新映射的页面进入 LRU
+ *
+ * 为什么需要 lru_add_drain？
+ * - LRU 批处理机制将页面操作延迟到 Per-CPU 队列中以提高性能
+ * - 但在某些关键路径上需要保证内存视图的一致性和实时性
+ * - 此函数确保所有延迟的页面操作立即生效
+ *
+ * 性能考虑：
+ * - 这是一个相对昂贵的操作（需要获取 LRU 锁并遍历所有批处理队列）
+ * - 应该只在确实需要一致性视图的地方调用
+ * - 高频调用会抵消批处理机制的性能优势
+ */
 void lru_add_drain(void)
 {
 	local_lock(&cpu_fbatches.lock);
@@ -754,6 +934,25 @@ void lru_add_drain(void)
 	mlock_drain_local();
 }
 
+/*
+ * lru_add_and_bh_lrus_drain - 排空 LRU 和 buffer_head LRU 缓存
+ *
+ * 这是一个组合排空函数，在 SMP 系统中从 per-cpu 工作队列上下文调用。
+ *
+ * 执行步骤：
+ * 1. 排空当前 CPU 的所有 LRU 批处理队列（folio_batch）
+ * 2. 使当前 CPU 的 buffer_head LRU 缓存失效
+ * 3. 排空 mlock 相关的本地队列
+ *
+ * 调用上下文：
+ * - 在 SMP 系统中从 per-cpu 工作队列调用
+ * - lru_add_drain_cpu 和 invalidate_bh_lrus_cpu 应该在同一个 CPU 上运行
+ * - 在非 SMP 系统中不是问题，因为核心只有一个且锁会禁用抢占
+ *
+ * 为什么需要同时排空？
+ * - buffer_head 缓存中的页面可能也在 LRU 批处理队列中
+ * - 统一排空保证内存视图的一致性
+ */
 /*
  * It's called from per-cpu workqueue context in SMP case so
  * lru_add_drain_cpu and invalidate_bh_lrus_cpu should run on
@@ -787,10 +986,33 @@ static void lru_add_drain_per_cpu(struct work_struct *dummy)
 	lru_add_and_bh_lrus_drain();
 }
 
+/*
+ * cpu_needs_drain - 检查指定 CPU 是否需要排空 LRU 缓存
+ * @cpu: 要检查的 CPU 编号
+ *
+ * 返回值：如果该 CPU 的任何批处理队列中有待处理的页面，返回 true
+ *
+ * 检查的队列（按可能性从大到小排序）：
+ * 1. lru_add: 最常见，新页面加入 LRU
+ * 2. lru_rotate: 页面轮转队列
+ * 3. lru_deactivate_file: 文件页去活化
+ * 4. lru_deactivate: 一般去活化
+ * 5. lru_lazyfree: 延迟释放队列
+ * 6. activate: 页面激活队列
+ * 7. mlock: 内存锁定相关
+ * 8. buffer_head: buffer_head LRU 缓存
+ *
+ * 注意：对 lru_rotate.fbatch 使用 data_race() 是因为它受中断锁保护，
+ * 而其他队列由 cpu_fbatches.lock 保护。data_race() 表明这是一个
+ * 已知的良性竞态（benign race）。
+ */
 static bool cpu_needs_drain(unsigned int cpu)
 {
 	struct cpu_fbatches *fbatches = &per_cpu(cpu_fbatches, cpu);
 
+	/*
+	 * 按照它们不为零的可能性顺序检查这些队列
+	 */
 	/* Check these in order of likelihood that they're not zero */
 	return folio_batch_count(&fbatches->lru_add) ||
 		data_race(folio_batch_count(&per_cpu(lru_rotate.fbatch, cpu))) ||
@@ -803,6 +1025,74 @@ static bool cpu_needs_drain(unsigned int cpu)
 }
 
 /*
+ * __lru_add_drain_all - 排空所有 CPU 的 LRU 批处理队列（内部实现）
+ * @force_all_cpus: 是否强制排空所有 CPU（忽略代数优化）
+ *
+ * 这是 lru_add_drain_all() 的核心实现，负责协调多个 CPU 的 LRU 排空操作。
+ * 使用了一个复杂的代数（generation）机制来优化高竞争场景。
+ *
+ * === 代数（Generation）优化机制 ===
+ *
+ * 问题场景：
+ * 在高负载系统中，多个 CPU 可能同时调用 lru_add_drain_all()，导致：
+ * - 频繁的全局同步开销
+ * - 重复的 IPI（处理器间中断）
+ * - 不必要的工作队列调度
+ *
+ * 解决方案：全局代数计数器（lru_drain_gen）
+ *
+ * 定义 (A)：全局 lru_drain_gen = x 意味着所有代数 0 < n <= x
+ *           已经被调度进行排空操作
+ *
+ * 工作流程：
+ * 1. 每个 CPU 在进入函数时记录当前的全局代数（B 点）
+ * 2. 获取互斥锁后，检查是否有更新的代数已经被调度（C 点）
+ * 3. 如果有，直接退出（避免重复工作）
+ * 4. 否则，递增全局代数，执行排空操作（D 点）
+ *
+ * === 内存屏障和同步 ===
+ *
+ * smp_mb() 在进入前：
+ * - 确保当前 CPU 对 folio_batch 计数器的存储对其他 CPU 可见
+ * - 之后才加载全局 lru_drain_gen
+ *
+ * smp_load_acquire() 在 (B) 点：
+ * - 确保读取代数在获取互斥锁之前完成
+ * - 与 (D) 点的 smp_mb() 配对
+ *
+ * smp_mb() 在 (D) 点：
+ * - 确保新的全局代数被存储后，才开始加载 folio_batch 计数器
+ * - 防止 CPU #x 的更新被 CPU #z 漏掉
+ *
+ * === 关键时序示例 ===
+ *
+ * 假设 CPU #x < #y < #z，CPU #z 正在遍历所有 CPU 并已经检查完 CPU #y：
+ *
+ * 时间线：
+ * T1: CPU #z 开始遍历，已检查 CPU #y，准备检查后续 CPU
+ * T2: CPU #x 向其 per-cpu 向量添加页面
+ * T3: CPU #x 调用 lru_add_drain_all()
+ *
+ * 如果内存屏障在循环后（错误做法）：
+ * - CPU #x 会在 (C) 点看到相同的代数并直接退出
+ * - CPU #x 的新页面被漏掉，不会被排空
+ *
+ * 正确做法（当前实现）：
+ * - (D) 点的 smp_mb() 在循环前执行
+ * - 保证代数递增和计数器加载之间的顺序
+ * - CPU #x 要么被当前遍历捕获，要么会启动新一轮排空
+ *
+ * === 热拔插处理 ===
+ *
+ * 不需要 CPU 热拔插锁，因为：
+ * - per-cpu 工作队列会在 page_alloc_cpu_dead 回调之前关闭
+ * - 持有热拔插锁调用此函数可能导致通过 WQ 上下文产生间接依赖
+ *
+ * @force_all_cpus:
+ * - false: 使用代数优化，如果其他 CPU 已调度更新的代数则跳过
+ * - true:  强制排空所有 CPU，忽略代数优化（用于 lru_cache_disable）
+ */
+/*
  * Doesn't need any cpu hotplug locking because we do rely on per-cpu
  * kworkers being shut down before our page_alloc_cpu_dead callback is
  * executed on the offlined cpu.
@@ -811,6 +1101,15 @@ static bool cpu_needs_drain(unsigned int cpu)
  */
 static inline void __lru_add_drain_all(bool force_all_cpus)
 {
+	/*
+	 * lru_drain_gen - 全局页面代数编号
+	 *
+	 * (A) 定义：全局 lru_drain_gen = x 意味着所有代数
+	 *     0 < n <= x 已经被*调度*进行排空操作。
+	 *
+	 * 这是针对高竞争使用场景的优化，在该场景中用户空间工作负载
+	 * 为每个 CPU 持续生成页面流。
+	 */
 	/*
 	 * lru_drain_gen - Global pages generation number
 	 *
@@ -827,6 +1126,9 @@ static inline void __lru_add_drain_all(bool force_all_cpus)
 	unsigned cpu, this_gen;
 
 	/*
+	 * 确保在 mm_percpu_wq 完全初始化之前没有人触发此路径。
+	 */
+	/*
 	 * Make sure nobody triggers this path before mm_percpu_wq is fully
 	 * initialized.
 	 */
@@ -834,12 +1136,22 @@ static inline void __lru_add_drain_all(bool force_all_cpus)
 		return;
 
 	/*
+	 * 保证当前 CPU 对 folio_batch 计数器的存储对其他 CPU 可见，
+	 * 然后再加载当前的排空代数。
+	 */
+	/*
 	 * Guarantee folio_batch counter stores visible by this CPU
 	 * are visible to other CPUs before loading the current drain
 	 * generation.
 	 */
 	smp_mb();
 
+	/*
+	 * (B) 本地缓存全局 LRU 排空代数编号
+	 *
+	 * 读屏障确保在获取互斥锁之前加载计数器。
+	 * 它与 (D) 点互斥临界区内的 smp_mb() 配对。
+	 */
 	/*
 	 * (B) Locally cache global LRU draining generation number
 	 *
@@ -852,12 +1164,34 @@ static inline void __lru_add_drain_all(bool force_all_cpus)
 	mutex_lock(&lock);
 
 	/*
+	 * (C) 如果来自另一个 lru_add_drain_all() 的更新代数已经被
+	 * 调度进行排空，则退出排空操作。参见检查 (A)。
+	 */
+	/*
 	 * (C) Exit the draining operation if a newer generation, from another
 	 * lru_add_drain_all(), was already scheduled for draining. Check (A).
 	 */
 	if (unlikely(this_gen != lru_drain_gen && !force_all_cpus))
 		goto done;
 
+	/*
+	 * (D) 递增全局代数编号
+	 *
+	 * 与临界区外的 (B) 点的 smp_load_acquire() 配对。
+	 * 使用完全内存屏障以保证新的全局排空代数编号被存储后，
+	 * 再加载 folio_batch 计数器。
+	 *
+	 * 此配对必须在这里完成，在下面的 for_each_online_cpu 循环之前，
+	 * 该循环排空页面向量。
+	 *
+	 * 设 x, y, z 代表一些系统 CPU 编号，其中 x < y < z。
+	 * 假设 CPU #z 在下面的 for_each_online_cpu 循环中间，
+	 * 并且已经到达 CPU #y 的 per-cpu 数据。CPU #x 出现，
+	 * 向其 per-cpu 向量添加一些页面，然后调用 lru_add_drain_all()。
+	 *
+	 * 如果配对屏障在稍后的步骤完成，例如在循环之后，
+	 * CPU #x 将只会在 (C) 点退出并错过刷新其所有添加的页面。
+	 */
 	/*
 	 * (D) Increment global generation number
 	 *
@@ -883,16 +1217,25 @@ static inline void __lru_add_drain_all(bool force_all_cpus)
 	smp_mb();
 
 	cpumask_clear(&has_work);
+	/*
+	 * 遍历所有在线 CPU，检查是否需要排空
+	 */
 	for_each_online_cpu(cpu) {
 		struct work_struct *work = &per_cpu(lru_add_drain_work, cpu);
 
 		if (cpu_needs_drain(cpu)) {
+			/*
+			 * 为需要排空的 CPU 初始化工作项并加入工作队列
+			 */
 			INIT_WORK(work, lru_add_drain_per_cpu);
 			queue_work_on(cpu, mm_percpu_wq, work);
 			__cpumask_set_cpu(cpu, &has_work);
 		}
 	}
 
+	/*
+	 * 等待所有排空工作完成
+	 */
 	for_each_cpu(cpu, &has_work)
 		flush_work(&per_cpu(lru_add_drain_work, cpu));
 
@@ -900,6 +1243,34 @@ done:
 	mutex_unlock(&lock);
 }
 
+/*
+ * lru_add_drain_all - 排空所有在线 CPU 的 LRU 批处理队列
+ *
+ * 这是系统级的 LRU 排空接口，用于确保所有 CPU 的 LRU 批处理队列被刷新。
+ *
+ * 功能：
+ * - 协调所有在线 CPU 的 LRU 排空操作
+ * - 使用工作队列机制在各个 CPU 上异步执行排空
+ * - 使用代数优化避免重复工作
+ * - 等待所有排空工作完成后返回
+ *
+ * 典型使用场景：
+ * 1. 内存压缩（compaction）：需要全局一致的内存视图
+ * 2. 内存迁移：确保待迁移页面不在任何 CPU 的批处理队列中
+ * 3. 内存热拔插：在移除内存前确保页面状态一致
+ * 4. 内存统计：获取准确的全局 LRU 统计信息
+ * 5. 某些系统调用（如 mlock）需要全局一致的页面状态
+ *
+ * 性能影响：
+ * - 这是一个非常昂贵的操作（需要所有 CPU 协作）
+ * - 会导致全系统的 IPI 和工作队列调度
+ * - 应该谨慎使用，只在确实需要全局一致性时调用
+ * - 代数优化机制可以减轻高频调用的影响
+ *
+ * 与 lru_add_drain() 的区别：
+ * - lru_add_drain(): 仅排空当前 CPU，开销小，局部影响
+ * - lru_add_drain_all(): 排空所有 CPU，开销大，全局影响
+ */
 void lru_add_drain_all(void)
 {
 	__lru_add_drain_all(false);

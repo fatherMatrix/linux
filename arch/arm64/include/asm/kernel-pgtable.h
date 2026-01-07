@@ -93,6 +93,33 @@
 #endif
 #define INIT_IDMAP_DIR_PAGES	EARLY_PAGES(KIMAGE_VADDR, _end + MAX_FDT_SIZE + SWAPPER_BLOCK_SIZE, 1)
 
+/*
+ * 早期内核页表映射参数
+ *
+ * SWAPPER_BLOCK_SHIFT: 最终映射块的地址位移（映射粒度）
+ * SWAPPER_BLOCK_SIZE:  最终映射块的大小
+ * SWAPPER_TABLE_SHIFT: 中间级别页表的地址位移（用于计算页表索引）
+ *
+ * 配置差异原因：
+ * - ARM64 启动协议要求 2MB 对齐
+ * - 4KB 页面：PMD 块映射粒度是 2MB，完美匹配，可使用块映射（Section Mapping）
+ *   - SWAPPER_TABLE_SHIFT = PUD_SHIFT (30)：在 PUD 级别创建指向 PMD 表的表项
+ *   - SWAPPER_BLOCK_SHIFT = PMD_SHIFT (21)：PMD 表项直接映射 2MB 物理内存
+ *   - 页表层级：PGD → PUD → PMD (2MB 块) → 物理内存（3 级）
+ *
+ * - 16KB/64KB 页面：PMD 块映射粒度（32MB/512MB）远大于 2MB，无法使用块映射
+ *   - SWAPPER_TABLE_SHIFT = PMD_SHIFT (25/29)：在 PMD 级别创建指向 PTE 表的表项
+ *   - SWAPPER_BLOCK_SHIFT = PAGE_SHIFT (14/16)：PTE 表项映射 16KB/64KB 页面
+ *   - 页表层级：PGD → PUD → PMD → PTE (16KB/64KB 页) → 物理内存（4 级）
+ *
+ * 应用场景：
+ * - 内核启动汇编代码（head.S）的 map_memory 宏使用这些宏来：
+ *   1. 计算虚拟地址在各级页表中的索引（通过 SWAPPER_TABLE_SHIFT）
+ *   2. 确定最终的映射粒度（通过 SWAPPER_BLOCK_SHIFT）
+ *   3. 创建 swapper 初始页表（内核启动时使用的页表）
+ *
+ * 详细分析见：Documentation/arm64_swapper_table_shift_analysis.md
+ */
 /* Initial memory map size */
 #ifdef CONFIG_ARM64_4K_PAGES
 #define SWAPPER_BLOCK_SHIFT	PMD_SHIFT

@@ -535,6 +535,38 @@ static bool vmemmap_should_optimize(const struct hstate *h, const struct page *h
 	return true;
 }
 
+/*
+ * HugeTLB VMEMMAP 优化主函数
+ *
+ * 优化 HugeTLB 页面的 vmemmap 页面，减少内存开销。
+ *
+ * 优化原理：
+ * 对于 2MB HugeTLB 页面（512 个基础页）：
+ * - 需要 512 个 struct page，占用 8 个页帧（512 × 64 字节 / 4096 字节）
+ * - 但只有前 4 个 struct page 包含有用信息（__NR_USED_SUBPAGE）
+ * - 其余 struct page 只是设置 compound_head 指针
+ *
+ * 优化策略：
+ * 1. 保留第 1 个页帧（包含前 4 个有用的 struct page）
+ * 2. 将第 2-8 个页帧的虚拟地址重映射到第 1 个页帧
+ * 3. 释放第 2-8 个页帧到 buddy 系统
+ * 4. 节省：7 个页帧（28KB）每个 2MB HugeTLB
+ *
+ * 对于 1GB HugeTLB 页面：
+ * - 节省：3584 个页帧（14MB）每个 1GB HugeTLB
+ *
+ * 参数：
+ * @h:    HugeTLB 状态结构
+ * @head: 要优化的 HugeTLB 页面（head page）
+ *
+ * 注意：
+ * - 此函数只是尝试优化，不保证成功
+ * - 使用 HPageVmemmapOptimized(head) 检查是否成功优化
+ * - 优化后的页面在释放时需要调用 hugetlb_vmemmap_restore() 恢复
+ *
+ * 详细分析见：Documentation/sparse_vmemmap_and_hugetlb_vmemmap_optimization.md
+ * 官方文档见：Documentation/mm/vmemmap_dedup.rst
+ */
 /**
  * hugetlb_vmemmap_optimize - optimize @head page's vmemmap pages.
  * @h:		struct hstate.
@@ -550,11 +582,30 @@ void hugetlb_vmemmap_optimize(const struct hstate *h, struct page *head)
 	unsigned long vmemmap_start = (unsigned long)head, vmemmap_end;
 	unsigned long vmemmap_reuse;
 
+	/*
+	 * 检查是否应该优化：
+	 * - vmemmap_optimize_enabled 全局开关
+	 * - HugeTLB 大小是否可优化
+	 * - vmemmap 页面不能自托管（避免自引用）
+	 */
 	if (!vmemmap_should_optimize(h, head))
 		return;
 
+	/*
+	 * 增加优化计数（用于跟踪有多少 HugeTLB 已优化）
+	 */
 	static_branch_inc(&hugetlb_optimize_vmemmap_key);
 
+	/*
+	 * 计算 vmemmap 地址范围：
+	 * - vmemmap_end: 整个 struct page 数组的结束地址
+	 * - vmemmap_reuse: 保留的第一个页面（page 0）
+	 * - vmemmap_start: 要重映射的起始地址（page 1）
+	 *
+	 * 例如对于 2MB HugeTLB：
+	 *   [page 0]               <- vmemmap_reuse (保留)
+	 *   [page 1 - page 7]      <- [vmemmap_start, vmemmap_end) (重映射)
+	 */
 	vmemmap_end	= vmemmap_start + hugetlb_vmemmap_size(h);
 	vmemmap_reuse	= vmemmap_start;
 	vmemmap_start	+= HUGETLB_VMEMMAP_RESERVE_SIZE;
@@ -563,6 +614,13 @@ void hugetlb_vmemmap_optimize(const struct hstate *h, struct page *head)
 	 * Remap the vmemmap virtual address range [@vmemmap_start, @vmemmap_end)
 	 * to the page which @vmemmap_reuse is mapped to, then free the pages
 	 * which the range [@vmemmap_start, @vmemmap_end] is mapped to.
+	 */
+	/*
+	 * 重映射 vmemmap 虚拟地址范围 [vmemmap_start, vmemmap_end)
+	 * 到 vmemmap_reuse 映射的页面，然后释放原来映射的页面。
+	 *
+	 * 如果失败，减少优化计数并返回
+	 * 如果成功，设置 HPageVmemmapOptimized 标志
 	 */
 	if (vmemmap_remap_free(vmemmap_start, vmemmap_end, vmemmap_reuse))
 		static_branch_dec(&hugetlb_optimize_vmemmap_key);
