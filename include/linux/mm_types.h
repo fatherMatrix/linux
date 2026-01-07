@@ -72,6 +72,11 @@ struct mem_cgroup;
 #endif
 
 struct page {
+	/*
+	 * - PG_slab表示页数与SLUB分配器
+	 * - set_page_zone() / page_zonenum()
+	 * - set_page_node() / page_to_nid()
+	 */
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
 	/*
@@ -674,7 +679,7 @@ struct mm_cid {
 
 struct kioctx_table;
 struct mm_struct {
-	struct {
+	// struct {
 		/*
 		 * Fields which are often written to are placed in a separate
 		 * cache line.
@@ -920,7 +925,7 @@ struct mm_struct {
 #endif
 		} lru_gen;
 #endif /* CONFIG_LRU_GEN */
-	} __randomize_layout;
+	// } __randomize_layout;
 
 	/*
 	 * The mm_cpumask needs to be at the end of mm_struct, because it

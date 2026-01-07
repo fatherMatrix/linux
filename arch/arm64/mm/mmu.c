@@ -1154,6 +1154,7 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node,
 	if (!IS_ENABLED(CONFIG_ARM64_4K_PAGES))
 		return vmemmap_populate_basepages(start, end, node, altmap);
 	else
+		/* HVO优化 */
 		return vmemmap_populate_hugepages(start, end, node, altmap);
 }
 

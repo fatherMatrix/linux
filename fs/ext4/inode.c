@@ -595,6 +595,7 @@ found:
 		 * If we need to convert extent to unwritten
 		 * we continue and do the actual work in
 		 * ext4_ext_map_blocks()
+		 * - 因为到这里，工作必定已经全部完成了
 		 */
 		if (!(flags & EXT4_GET_BLOCKS_CONVERT_UNWRITTEN))
 			return retval;
@@ -616,6 +617,8 @@ found:
 	/*
 	 * We need to check for EXT4 here because migrate
 	 * could have changed the inode type in between
+	 * - 我感觉主要是因为上面经历了一次从读锁到写锁的转换，中间有一个
+	 *   时间窗口
 	 */
 	if (ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS)) {
 		retval = ext4_ext_map_blocks(handle, inode, map, flags);

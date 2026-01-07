@@ -39,8 +39,10 @@ struct xfs_bmalloca {
 	 */
 	xfs_extlen_t		minlen;	/* minimum allocation size (blocks) */
 	xfs_extlen_t		minleft; /* amount must be left after alloc */
+	/* 当我们想要分配磁盘块时，我们发现逻辑地址处于eof之后 */
 	bool			eof;	/* set if allocating past last extent */
 	bool			wasdel;	/* replacing a delayed allocation */
+	/* 当我们分配完磁盘块时？ */
 	bool			aeof;	/* allocated space at eof */
 	bool			conv;	/* overwriting unwritten extents */
 	int			datatype;/* data type being allocated */

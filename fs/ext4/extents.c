@@ -4182,6 +4182,7 @@ int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
 		ext4_lblk_t hole_start, hole_len;
 
 		hole_start = map->m_lblk;
+		/* 里面直接查磁盘，但delayed extents仅在内存里 */
 		hole_len = ext4_ext_determine_hole(inode, path, &hole_start);
 		/*
 		 * put just found gap into cache to speed up

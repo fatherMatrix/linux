@@ -114,6 +114,7 @@ static inline int sparse_index_init(unsigned long section_nr, int nid)
  * mem_map, we use section_mem_map to store the section's NUMA
  * node.  This keeps us from having to use another data structure.  The
  * node information is cleared just before we store the real mem_map.
+ * - 参见 mem_section->section_mem_map 字段的注释
  */
 static inline unsigned long sparse_encode_early_nid(int nid)
 {
@@ -222,11 +223,14 @@ void __init subsection_map_init(unsigned long pfn, unsigned long nr_pages)
 #endif
 
 /* Record a memory area against a node. */
-static void __init memory_present(int nid, unsigned long start, unsigned long end)
+static void /* __init For Source Insight */ memory_present(int nid, unsigned long start, unsigned long end)
 {
 	unsigned long pfn;
 
 #ifdef CONFIG_SPARSEMEM_EXTREME
+/* tkernel4 / tkernel5都开启了这个选项 */
+
+	/* 主要作用是以防万一，给 mem_section 分配内存 */
 	if (unlikely(!mem_section)) {
 		unsigned long size, align;
 
@@ -239,13 +243,30 @@ static void __init memory_present(int nid, unsigned long start, unsigned long en
 	}
 #endif
 
+	/*
+	 * start变为其所属section的起始pfn
+	 * - 每个section中容纳的page数量固定
+	 */
 	start &= PAGE_SECTION_MASK;
+	/* 保证start和end都是合法的pfn */
 	mminit_validate_memmodel_limits(&start, &end);
 	for (pfn = start; pfn < end; pfn += PAGES_PER_SECTION) {
+		/* 每个section中的page数量都是固定的，所以很好换算 */
 		unsigned long section = pfn_to_section_nr(pfn);
 		struct mem_section *ms;
 
+		/* 如果开启了CONFIG_SPARSEMEM_EXTREME，这里分配数组的第二维 */
 		sparse_index_init(section, nid);
+		/*
+		 * 如果开启了NODE_NOT_IN_PAGE_FLAGS，那么需要一个section到node
+		 * 的转换数组；并在这里填充该数组；通过page得到node时先通过page
+		 * 的到section，然后通过该数组得到node；
+		 * 如果未开启NODE_NOT_IN_PAGE_FLAGS，那么page对应的node在page的
+		 * flags字段中，不需要section来过渡；下面的函数也条件编译为空操
+		 * 作；（这个是常见情况）
+		 * - 此时通过可以在后面通过 set_page_links() -> set_page_zone()
+		 *   来配置（因为无需section参与）		 
+		 */
 		set_section_nid(section, nid);
 
 		ms = __nr_to_section(section);
@@ -328,6 +349,7 @@ static inline phys_addr_t pgdat_to_phys(struct pglist_data *pgdat)
 #endif
 }
 
+/* 定义了 CONFIG_MEMORY_HOTPLUG 后走这里 */
 static struct mem_section_usage * __init
 sparse_early_usemaps_alloc_pgdat_section(struct pglist_data *pgdat,
 					 unsigned long size)
@@ -400,6 +422,8 @@ static void __init check_usemap_section_nr(int nid,
 		usemap_snr, pgdat_snr, nid);
 }
 #else
+
+/* 未定义 CONFIG_MEMORY_HOTPLUG 走这里 */
 static struct mem_section_usage * __init
 sparse_early_usemaps_alloc_pgdat_section(struct pglist_data *pgdat,
 					 unsigned long size)
@@ -416,6 +440,7 @@ static void __init check_usemap_section_nr(int nid,
 #ifdef CONFIG_SPARSEMEM_VMEMMAP
 static unsigned long __init section_map_size(void)
 {
+	/* 合理，sparsemem vmemmap模型的folio映射，就是PMD对齐的 */
 	return ALIGN(sizeof(struct page) * PAGES_PER_SECTION, PMD_SIZE);
 }
 
@@ -445,8 +470,8 @@ struct page __init *__populate_section_memmap(unsigned long pfn,
 }
 #endif /* !CONFIG_SPARSEMEM_VMEMMAP */
 
-static void *sparsemap_buf __meminitdata;
-static void *sparsemap_buf_end __meminitdata;
+static void *sparsemap_buf; // For SI __meminitdata;
+static void *sparsemap_buf_end; // For SI __meminitdata;
 
 static inline void __meminit sparse_buffer_free(unsigned long size)
 {
@@ -506,16 +531,33 @@ static void __init sparse_init_nid(int nid, unsigned long pnum_begin,
 				   unsigned long pnum_end,
 				   unsigned long map_count)
 {
+	/*
+	 * 之所以还需要map_count参数是因为[pnum_begin, pnum_end)间的mem_section
+	 * 有可能不连续，有空洞；
+	 * - 既然mem_section表示的内存是有空洞的，但下面分配的mem_section_usage
+	 *   又是一个连续的数组，是怎么处理对应关系的呢？
+	 *   > 不连续的mem_section通过自己的指针指向连续mem_section_usage数组中
+	 *     的一个元素即可
+	 */
 	struct mem_section_usage *usage;
 	unsigned long pnum;
 	struct page *map;
 
+	/* 分配 mem_section_usage 的内存，这块内存是一个关于mem_section_usage结构
+	 * 体的数组，每个元素对应一个section
+	 */
 	usage = sparse_early_usemaps_alloc_pgdat_section(NODE_DATA(nid),
 			mem_section_usage_size() * map_count);
 	if (!usage) {
 		pr_err("%s: node[%d] usemap allocation failed", __func__, nid);
 		goto failed;
 	}
+	/*
+	 * 这里分配的是当前mem_section所包含的所有page结构体占用的内存空间,这里
+	 * 相当于一次预分配，分配整个内存节点所需要的page结构体，然后分批给后面
+	 * 的__populate_section_memmap()分配给一个mem_section使用(具体的使用函
+	 * 数是vmemmap_alloc_block_buf)；
+	 */
 	sparse_buffer_init(map_count * section_map_size(), nid);
 	for_each_present_section_nr(pnum_begin, pnum) {
 		unsigned long pfn = section_nr_to_pfn(pnum);
@@ -523,6 +565,9 @@ static void __init sparse_init_nid(int nid, unsigned long pnum_begin,
 		if (pnum >= pnum_end)
 			break;
 
+		/* 建立真正的vmemmap映射
+		 * - 这个函数注意不要看错版本
+		 */
 		map = __populate_section_memmap(pfn, PAGES_PER_SECTION,
 				nid, NULL, NULL);
 		if (!map) {
@@ -533,6 +578,7 @@ static void __init sparse_init_nid(int nid, unsigned long pnum_begin,
 			goto failed;
 		}
 		check_usemap_section_nr(nid, usage);
+		/* 关联mem_section_usage和mem_section */
 		sparse_init_one_section(__nr_to_section(pnum), pnum, map, usage,
 				SECTION_IS_EARLY);
 		usage = (void *) usage + mem_section_usage_size();
@@ -554,12 +600,35 @@ failed:
 /*
  * Allocate the accumulated non-linear sections, allocate a mem_map
  * for each and record the physical to section mapping.
+ *
+ * 1. vmemmap 到 folio 物理页的映射建立时机
+ * - 启动时: sparse_init() → vmemmap_populate() → 建立页表映射
+ * - 热插拔: sparse_add_section() → section_activate() → vmemmap_populate() → 建立页表映射
+ * - 方式: 根据 CPU 能力，优先使用 2MB PMD 大页，否则使用 4KB PTE 页
+ *
+ * 2. folio 结构体初始化时机（在映射建立后）
+ * - 启动时: memmap_init() → __init_single_page()
+ * - 延迟初始化: deferred_init_pages() → __init_single_page()
+ * - 热插拔: move_pfn_range_to_zone() → memmap_init_range() → __init_single_page()
+ * - Online: online_pages_range() → 清除 Reserved，释放到 buddy
+ *
+ * 3. 热插拔移除时 vmemmap 页表清理（PMD 重点），会清空！三种 PMD 清空情况：
+ * - PMD 大页完全对齐移除 → 直接 pmd_clear()
+ * - PMD 大页未对齐但覆盖区域全部未使用 → vmemmap_pmd_is_unused() 检查后 pmd_clear()
+ * - 4KB 页映射，所有 512 个 PTE 都清空后 → free_pte_table() → pmd_clear()
+ *
+ * 递归向上清理：
+ * - 所有 PTE 空 → 清空 PMD
+ * - 所有 PMD 空 → 清空 PUD
+ * - 所有 PUD 空 → 清空 P4D
+ * - 最后 flush_tlb_all() 刷新 TLB
  */
 void __init sparse_init(void)
 {
 	unsigned long pnum_end, pnum_begin, map_count = 1;
 	int nid_begin;
 
+	/* 这个函数是用来标记所有的mem_section都在线，与memblock分配器无关 */
 	memblocks_present();
 
 	pnum_begin = first_present_section_nr();
@@ -569,8 +638,13 @@ void __init sparse_init(void)
 	set_pageblock_order();
 
 	for_each_present_section_nr(pnum_begin + 1, pnum_end) {
+		/* mem_section->section_mem_map中编码了对应的nid */
 		int nid = sparse_early_nid(__nr_to_section(pnum_end));
 
+		/* 
+		 * 这里是遍历所有的mem_section，取出同一个内存节点的所
+		 * 有mem_section后，再去继续执行sparse_init_nid；
+		 */
 		if (nid == nid_begin) {
 			map_count++;
 			continue;

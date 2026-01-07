@@ -467,7 +467,9 @@ void __init bootmem_init(void)
 	 * sparse_init() tries to allocate memory from memblock, so must be
 	 * done after the fixed reservations
 	 */
+	/* 主要功能为映射vmemmap的动作 */
 	sparse_init();
+	/* 里面包含了初始化folio结构体的动作 */
 	zone_sizes_init();
 
 	/*

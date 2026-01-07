@@ -844,6 +844,13 @@ struct zone {
 	/*
 	 * Flags for a pageblock_nr_pages block. See pageblock-flags.h.
 	 * In SPARSEMEM, this map is stored in struct mem_section
+	 *
+	 * 指向页块标志位图，页块的大小是分组阶数pageblock_order，这种页块称为
+	 * 分组页块；每个分组页块在位图中占用4位，其中3位用来存放页块的迁移类
+	 * 型。参见enum pageblock_bits；
+	 * - 内核在初始化时，将所有页块初始化为可移动类型，其他迁移类型的页是通
+	 *   过盗用产生的；参见 memmap_init_range() -> set_pageblock_migratetype()
+	 *   > 设置位置是： get_pageblock_bitmap()
 	 */
 	unsigned long		*pageblock_flags;
 #endif /* CONFIG_SPARSEMEM */
@@ -1773,7 +1780,13 @@ struct mem_section_usage {
 #ifdef CONFIG_SPARSEMEM_VMEMMAP
 	DECLARE_BITMAP(subsection_map, SUBSECTIONS_PER_SECTION);
 #endif
-	/* See declaration of similar field in struct zone */
+	/* See declaration of similar field in struct zone
+	 *
+	 * 对于SPARSE内存模型，pageblock_flags保存在mem_sectioni_usage结构体中；
+	 * 对于非SPARSE内存模型，pageblock_flags保存在zone结构体中；
+	 * - 作用参见zone->pageblock_flags注释
+	 * - 代码： set_pageblock_migratetype() ~> get_pageblock_bitmap()
+	 */
 	unsigned long pageblock_flags[0];
 };
 
